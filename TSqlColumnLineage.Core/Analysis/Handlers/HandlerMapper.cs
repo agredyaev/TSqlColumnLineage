@@ -90,48 +90,109 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers
         }
         
         /// <summary>
-        /// Gets the fragment types a handler can handle by reflection
+        /// Gets the fragment types a handler can handle through reflection with improved error handling
         /// </summary>
         private List<Type> GetHandledFragmentTypes(Type handlerType)
         {
             var result = new List<Type>();
             
-            // Method 1: Check for [HandlesFragment] attributes
-            var attributes = handlerType.GetCustomAttributes<HandlesFragmentAttribute>(false);
-            foreach (var attr in attributes)
+            try
             {
-                result.Add(attr.FragmentType);
-            }
-            
-            // Method 2: Check for explicit overrides of ExplicitVisit methods
-            var visitMethods = handlerType.GetMethods()
-                .Where(m => m.Name.StartsWith("ExplicitVisit") && 
-                           m.GetParameters().Length == 1 &&
-                           m.GetParameters()[0].ParameterType.IsSubclassOf(typeof(TSqlFragment)))
-                .ToList();
-                
-            foreach (var method in visitMethods)
-            {
-                var fragmentType = method.GetParameters()[0].ParameterType;
-                if (!result.Contains(fragmentType))
+                // Method 1: Check for [HandlesFragment] attributes
+                var attributes = handlerType.GetCustomAttributes<HandlesFragmentAttribute>(false);
+                if (attributes != null)
                 {
-                    result.Add(fragmentType);
+                    foreach (var attr in attributes)
+                    {
+                        if (attr.FragmentType != null && !result.Contains(attr.FragmentType))
+                        {
+                            result.Add(attr.FragmentType);
+                        }
+                    }
                 }
             }
-            
-            // Method 3: Check for implemented interfaces
-            var interfaces = handlerType.GetInterfaces()
-                .Where(i => i.IsGenericType && 
-                           i.GetGenericTypeDefinition() == typeof(IQueryHandler<>))
-                .ToList();
-                
-            foreach (var iface in interfaces)
+            catch (Exception ex)
             {
-                var fragmentType = iface.GetGenericArguments()[0];
-                if (!result.Contains(fragmentType))
+                _logger?.LogWarning($"Error getting attributes for handler {handlerType.Name}: {ex.Message}");
+            }
+            
+            try
+            {
+                // Method 2: Check for explicit overrides of ExplicitVisit methods
+                var visitMethods = handlerType.GetMethods()
+                    .Where(m => m.Name.StartsWith("ExplicitVisit") && 
+                            m.GetParameters().Length == 1 &&
+                            m.GetParameters()[0].ParameterType.IsSubclassOf(typeof(TSqlFragment)))
+                    .ToList();
+                    
+                foreach (var method in visitMethods)
                 {
-                    result.Add(fragmentType);
+                    try
+                    {
+                        var fragmentType = method.GetParameters()[0].ParameterType;
+                        if (fragmentType != null && !result.Contains(fragmentType))
+                        {
+                            result.Add(fragmentType);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning($"Error processing method {method.Name} on handler {handlerType.Name}: {ex.Message}");
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning($"Error getting methods for handler {handlerType.Name}: {ex.Message}");
+            }
+            
+            try
+            {
+                // Method 3: Check for implemented interfaces
+                var interfaces = handlerType.GetInterfaces()
+                    .Where(i => i.IsGenericType && 
+                            i.GetGenericTypeDefinition() == typeof(IQueryHandler<>))
+                    .ToList();
+                    
+                foreach (var iface in interfaces)
+                {
+                    try
+                    {
+                        var fragmentType = iface.GetGenericArguments()[0];
+                        if (fragmentType != null && !result.Contains(fragmentType))
+                        {
+                            result.Add(fragmentType);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning($"Error processing interface {iface.Name} on handler {handlerType.Name}: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning($"Error getting interfaces for handler {handlerType.Name}: {ex.Message}");
+            }
+            
+            // Method 4: Check for implementation of CanHandle method
+            try
+            {
+                var canHandleMethod = handlerType.GetMethod("CanHandle", 
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+                    
+                if (canHandleMethod != null)
+                {
+                    // If we found a CanHandle method but couldn't determine types, add TSqlFragment as a fallback
+                    if (result.Count == 0)
+                    {
+                        result.Add(typeof(TSqlFragment));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning($"Error checking CanHandle method on handler {handlerType.Name}: {ex.Message}");
             }
             
             return result;

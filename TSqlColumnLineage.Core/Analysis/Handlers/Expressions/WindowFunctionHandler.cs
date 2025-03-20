@@ -1,28 +1,73 @@
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using TSqlColumnLineage.Core.Analysis.Handlers.Base;
-using TSqlColumnLineage.Core.Analysis.Visitors.Specialized;
+using TSqlColumnLineage.Core.Analysis.Visitors.Base;
 using TSqlColumnLineage.Core.Common.Logging;
-using TSqlColumnLineage.Core.Models.Graph;
+using TSqlColumnLineage.Core.Common.Utils;
 using TSqlColumnLineage.Core.Models.Nodes;
 
 namespace TSqlColumnLineage.Core.Analysis.Handlers.Expressions
 {
     public class WindowFunctionHandler : AbstractQueryHandler
     {
-        public WindowFunctionHandler(ColumnLineageVisitor visitor, LineageGraph graph, LineageContext context, ILogger? logger) : base(visitor, graph, context, logger)
+        public WindowFunctionHandler(
+            VisitorContext context, 
+            StringPool stringPool, 
+            IdGenerator idGenerator, 
+            ILogger logger = null) 
+            : base(context, stringPool, idGenerator, logger)
         {
+        }
+        
+        public override bool CanHandle(TSqlFragment fragment)
+        {
+            return fragment is WindowFunction;
+        }
+        
+        public override bool Handle(TSqlFragment fragment, VisitorContext context)
+        {
+            if (fragment is WindowFunction windowFunc)
+            {
+                ExpressionNode expressionNode = null;
+                
+                // Try to get current expression node from context
+                if (context.State.TryGetValue("CurrentExpression", out var currentExpr) && 
+                    currentExpr is ExpressionNode exprNode)
+                {
+                    expressionNode = exprNode;
+                }
+                
+                return Process(windowFunc, expressionNode);
+            }
+            
+            return false;
         }
 
         public bool Process(WindowFunction windowFunc, ExpressionNode expressionNode)
         {
-            LogDebug($"Processing WindowFunction: {Visitor.GetSqlText(windowFunc)}");
+            LogDebug($"Processing WindowFunction: {GetSqlText(windowFunc)}");
+
+            // Create an expression node if one wasn't provided
+            if (expressionNode == null)
+            {
+                expressionNode = new ExpressionNode
+                {
+                    Id = CreateNodeId("EXPR", $"WINDOW_{System.Guid.NewGuid().ToString().Substring(0, 8)}"),
+                    Name = "Window_Function",
+                    ObjectName = GetSqlText(windowFunc),
+                    Type = "WindowFunction",
+                    ExpressionType = "WindowFunction",
+                    Expression = GetSqlText(windowFunc)
+                };
+                
+                Graph.AddNode(expressionNode);
+            }
 
             // 1. Process Partition By Clause
             if (windowFunc.PartitionByClause != null)
             {
                 foreach (var expression in windowFunc.PartitionByClause.PartitionExpressions)
                 {
-                    Visitor.Visit(expression);
+                    Context.Visit(expression);
                 }
             }
 
@@ -31,7 +76,7 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Expressions
             {
                 foreach (var orderByElement in windowFunc.OrderByClause.OrderByElements)
                 {
-                    Visitor.Visit(orderByElement.Expression);
+                    Context.Visit(orderByElement.Expression);
                 }
             }
 
@@ -43,13 +88,13 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Expressions
                     // Process start boundary
                     if (windowFunc.WindowClause.StartBoundary != null && windowFunc.WindowClause.StartBoundary.Expression != null)
                     {
-                        Visitor.Visit(windowFunc.WindowClause.StartBoundary.Expression);
+                        Context.Visit(windowFunc.WindowClause.StartBoundary.Expression);
                     }
 
                     // Process end boundary
                     if (windowFunc.WindowClause.EndBoundary != null && windowFunc.WindowClause.EndBoundary.Expression != null)
                     {
-                        Visitor.Visit(windowFunc.WindowClause.EndBoundary.Expression);
+                        Context.Visit(windowFunc.WindowClause.EndBoundary.Expression);
                     }
                 }
             }
@@ -57,15 +102,8 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Expressions
             // 4. Visit Function Arguments
             foreach (var arg in windowFunc.Parameters) 
             {
-                Visitor.Visit(arg);
+                Context.Visit(arg);
             }
-
-            //Create Edge from input column to expression node
-            if (expressionNode != null)
-            {
-                //TODO: create edges
-            }
-
 
             return true;
         }

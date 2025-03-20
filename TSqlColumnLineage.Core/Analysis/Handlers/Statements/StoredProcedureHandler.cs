@@ -885,47 +885,84 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Statements
             }
         }
         
-        /// <summary>
-        /// Creates a visitor for processing statements
-        /// </summary>
-        private TSqlFragmentVisitor CreateVisitor()
+    /// <summary>
+    /// Creates a visitor for processing statements
+    /// </summary>
+    private TSqlFragmentVisitor CreateVisitor()
+    {
+        // First try to get a visitor factory from context
+        if (Context.State.TryGetValue("VisitorFactory", out var factory) && 
+            factory is Func<VisitorContext, ILogger, TSqlFragmentVisitor> visitorFactory)
         {
-            // Check for cached visitor factory in context
-            if (Context.State.TryGetValue("VisitorFactory", out var factory) && factory is Func<VisitorContext, ILogger, TSqlFragmentVisitor>)
+            return visitorFactory(Context, Logger);
+        }
+        
+        // If no factory in context, try to create a new visitor directly
+        try
+        {
+            // Try using full type name with assembly qualification
+            var visitorType = Type.GetType(
+                "TSqlColumnLineage.Core.Analysis.Visitors.Specialized.ColumnLineageVisitor, TSqlColumnLineage.Core",
+                false, 
+                true);
+                
+            if (visitorType == null)
             {
-                return (factory as Func<VisitorContext, ILogger, TSqlFragmentVisitor>)(Context, Logger);
+                // Try to get the type from current assembly
+                visitorType = Context.GetType().Assembly.GetType(
+                    "TSqlColumnLineage.Core.Analysis.Visitors.Specialized.ColumnLineageVisitor",
+                    false,
+                    true);
             }
             
-            // Try to create a new visitor instance using reflection
-            try
+            if (visitorType != null)
             {
-                var visitorType = Type.GetType("TSqlColumnLineage.Core.Analysis.Visitors.Specialized.ColumnLineageVisitor, TSqlColumnLineage.Core");
-                if (visitorType != null)
+                // Find appropriate constructor
+                var ctor = visitorType.GetConstructor(new[] { 
+                    typeof(VisitorContext),
+                    typeof(StringPool), 
+                    typeof(IdGenerator),
+                    typeof(IHandlerRegistry),
+                    typeof(ILogger),
+                    typeof(CancellationToken)
+                });
+                
+                if (ctor != null)
                 {
-                    return Activator.CreateInstance(visitorType, Context, null, Logger) as TSqlFragmentVisitor;
-                }
-            }
-            catch
-            {
-                // Fallback to legacy reflection approach
-                try
-                {
-                    return Context.GetType().Assembly.CreateInstance(
-                        "TSqlColumnLineage.Core.Analysis.Visitors.Specialized.ColumnLineageVisitor",
-                        false,
-                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
-                        null,
-                        new[] { Context, null, Logger },
-                        null,
-                        null) as TSqlFragmentVisitor;
-                }
-                catch
-                {
-                    LogError("Failed to create visitor instance");
-                    return null;
+                    // Get required dependencies from context or create them
+                    var stringPool = _stringPool ?? new StringPool();
+                    var idGenerator = _idGenerator ?? new IdGenerator(stringPool);
+                    var handlerRegistry = Context.State.TryGetValue("HandlerRegistry", out var registry) && 
+                                        registry is IHandlerRegistry ? 
+                                        (IHandlerRegistry)registry : 
+                                        HandlerRegistry.CreateDefault(Context, stringPool, idGenerator, Logger);
+                                        
+                    // Create new visitor instance
+                    return (TSqlFragmentVisitor)ctor.Invoke(new object[] { 
+                        Context, 
+                        stringPool, 
+                        idGenerator, 
+                        handlerRegistry, 
+                        Logger, 
+                        CancellationToken.None 
+                    });
                 }
             }
             
+            // Fallback to trying to create using the simpler approach
+            LogDebug("Using fallback visitor creation approach");
+            return Context.GetType().Assembly.CreateInstance(
+                "TSqlColumnLineage.Core.Analysis.Visitors.Specialized.ColumnLineageVisitor",
+                false,
+                BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+                null,
+                new object[] { Context, null, Logger },
+                null,
+                null) as TSqlFragmentVisitor;
+        }
+        catch (Exception ex)
+        {
+            LogError($"Failed to create visitor instance: {ex.Message}", ex);
             return null;
         }
     }
