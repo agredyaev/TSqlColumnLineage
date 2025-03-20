@@ -30,10 +30,13 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Statements
         /// </summary>
         /// <param name="context">Visitor context</param>
         /// <param name="logger">Logger (optional)</param>
-        public StoredProcedureHandler(VisitorContext context, ILogger logger = null)
-            : base(context, logger)
-        {
-        }
+        public StoredProcedureHandler(
+            VisitorContext context, 
+            StringPool stringPool,
+            IdGenerator idGenerator,
+            ILogger logger = null)
+            : base(context, stringPool, idGenerator, logger);
+
         
         /// <summary>
         /// Checks if this handler can process the specified fragment
@@ -84,7 +87,6 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Statements
             catch (Exception ex)
             {
                 LogError($"Error processing {fragment.GetType().Name}", ex);
-                return false;
             }
         }
         
