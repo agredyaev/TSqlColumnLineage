@@ -1,14 +1,16 @@
 using Newtonsoft.Json;
 using System;
-using TSqlColumnLineage.Core.Models.Edges;
+using TSqlColumnLineage.Core.Common.Utils;
 
 namespace TSqlColumnLineage.Core.Models.Edges
 {
     /// <summary>
-    /// Represents a relationship between nodes in the lineage graph
+    /// Represents a relationship between nodes in the lineage graph with optimized memory usage
     /// </summary>
-    public class LineageEdge
+    public sealed class LineageEdge
     {
+        // Strings interned by StringPool
+        
         /// <summary>
         /// Unique identifier of the edge
         /// </summary>
@@ -45,10 +47,6 @@ namespace TSqlColumnLineage.Core.Models.Edges
                     return result;
                 return EdgeType.Indirect; // Default to indirect if unknown
             }
-            set
-            {
-                Type = value.ToString();
-            }
         }
 
         /// <summary>
@@ -70,24 +68,65 @@ namespace TSqlColumnLineage.Core.Models.Edges
         public string Key => $"{SourceId}-{TargetId}-{Type}";
         
         /// <summary>
-        /// Creates a clone of this edge
+        /// Efficient constructor to create a fully initialized edge with interned strings
+        /// </summary>
+        /// <param name="id">Edge ID</param>
+        /// <param name="sourceId">Source node ID</param>
+        /// <param name="targetId">Target node ID</param>
+        /// <param name="type">Edge type</param>
+        /// <param name="operation">Edge operation</param>
+        /// <param name="sqlExpression">SQL expression for this edge</param>
+        public LineageEdge(
+            string id, 
+            string sourceId, 
+            string targetId, 
+            string type, 
+            string operation, 
+            string sqlExpression = "")
+        {
+            Id = id;
+            SourceId = sourceId;
+            TargetId = targetId;
+            Type = type;
+            Operation = operation;
+            SqlExpression = sqlExpression ?? string.Empty;
+        }
+        
+        /// <summary>
+        /// Default constructor for deserialization
+        /// </summary>
+        public LineageEdge() { }
+        
+        /// <summary>
+        /// Returns a clone of this edge
         /// </summary>
         public LineageEdge Clone()
         {
-            return new LineageEdge
-            {
-                Id = Id,
-                SourceId = SourceId,
-                TargetId = TargetId,
-                Type = Type,
-                Operation = Operation,
-                SqlExpression = SqlExpression
-            };
+            return new LineageEdge(Id, SourceId, TargetId, Type, Operation, SqlExpression);
         }
 
+        /// <summary>
+        /// Returns a string representation of the edge
+        /// </summary>
         public override string ToString()
         {
             return $"{SourceId} --[{Type}:{Operation}]--> {TargetId}";
+        }
+        
+        /// <summary>
+        /// Helper method to update the strings in this edge using the provided StringPool
+        /// </summary>
+        /// <param name="stringPool">StringPool to intern strings</param>
+        public void InternStrings(StringPool stringPool)
+        {
+            if (stringPool == null) return;
+            
+            Id = stringPool.Intern(Id);
+            SourceId = stringPool.Intern(SourceId);
+            TargetId = stringPool.Intern(TargetId);
+            Type = stringPool.Intern(Type);
+            Operation = stringPool.Intern(Operation);
+            SqlExpression = stringPool.Intern(SqlExpression);
         }
     }
 }

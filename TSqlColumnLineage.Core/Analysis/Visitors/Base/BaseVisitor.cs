@@ -3,7 +3,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using TSqlColumnLineage.Core.Common.Logging;
+using TSqlColumnLineage.Core.Common.Utils;
 using TSqlColumnLineage.Core.Models.Edges;
 using TSqlColumnLineage.Core.Models.Graph;
 using TSqlColumnLineage.Core.Models.Nodes;
@@ -11,15 +13,16 @@ using TSqlColumnLineage.Core.Models.Nodes;
 namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
 {
     /// <summary>
-    /// Base visitor for traversing the T-SQL AST with improved performance and memory efficiency
+    /// Base visitor for traversing the T-SQL AST with improved performance and memory efficiency.
+    /// Uses a non-recursive traversal algorithm to prevent stack overflows with complex queries.
     /// </summary>
     public abstract class BaseVisitor : TSqlFragmentVisitor
     {
         // Visited fragments set using object IDs for better performance
-        private readonly HashSet<int> _visitedFragments = new();
+        private readonly HashSet<int> _visitedFragments = new HashSet<int>();
         
-        // Fragment processing stack for non-recursive traversal
-        private readonly Stack<TSqlFragment> _processingStack = new();
+        // Fragment processing queue for non-recursive traversal
+        private readonly Queue<TSqlFragment> _processingQueue = new Queue<TSqlFragment>();
         
         /// <summary>
         /// Visitor context for tracking state
@@ -44,21 +47,47 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
         /// <summary>
         /// String pool for memory optimization
         /// </summary>
-        private readonly Dictionary<string, string> _stringPool = new();
+        private readonly StringPool _stringPool;
+        
+        /// <summary>
+        /// ID generator for creating consistent IDs
+        /// </summary>
+        private readonly IdGenerator _idGenerator;
+        
+        /// <summary>
+        /// Counter for fragment processing to avoid excessive logging
+        /// </summary>
+        private int _fragmentCounter;
+        
+        /// <summary>
+        /// Cancellation token to support stopping long-running operations
+        /// </summary>
+        private readonly CancellationToken _cancellationToken;
         
         /// <summary>
         /// Creates a new base visitor
         /// </summary>
         /// <param name="context">Visitor context</param>
+        /// <param name="stringPool">String pool for memory optimization</param>
+        /// <param name="idGenerator">ID generator</param>
         /// <param name="logger">Logger (optional)</param>
-        protected BaseVisitor(VisitorContext context, ILogger logger = null)
+        /// <param name="cancellationToken">Cancellation token for stopping processing</param>
+        protected BaseVisitor(
+            VisitorContext context, 
+            StringPool stringPool,
+            IdGenerator idGenerator,
+            ILogger logger = null,
+            CancellationToken cancellationToken = default)
         {
             Context = context ?? throw new ArgumentNullException(nameof(context));
+            _stringPool = stringPool ?? throw new ArgumentNullException(nameof(stringPool));
+            _idGenerator = idGenerator ?? throw new ArgumentNullException(nameof(idGenerator));
             Logger = logger;
+            _cancellationToken = cancellationToken;
         }
         
         /// <summary>
-        /// Starts visiting the AST fragment in a non-recursive manner
+        /// Starts visiting the AST fragment in a non-recursive manner to prevent stack overflow
         /// </summary>
         public void VisitNonRecursive(TSqlFragment root)
         {
@@ -66,15 +95,16 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
             
             // Clear state
             _visitedFragments.Clear();
-            _processingStack.Clear();
+            _processingQueue.Clear();
+            _fragmentCounter = 0;
             
             // Start with the root fragment
-            _processingStack.Push(root);
+            _processingQueue.Enqueue(root);
             
-            // Process all fragments in the stack
-            while (_processingStack.Count > 0 && !Context.ShouldStop)
+            // Process all fragments in the queue
+            while (_processingQueue.Count > 0 && !Context.ShouldStop && !_cancellationToken.IsCancellationRequested)
             {
-                var fragment = _processingStack.Pop();
+                var fragment = _processingQueue.Dequeue();
                 
                 // Skip if already visited
                 int fragmentId = RuntimeHelpers.GetHashCode(fragment);
@@ -85,45 +115,53 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
                 _visitedFragments.Add(fragmentId);
                 
                 // Push the current fragment to context
-                Context.PushFragment(fragment);
-                
-                try
+                using (Context.CreateFragmentScope(fragment))
                 {
-                    // Process this fragment
-                    fragment.Accept(this);
-                    
-                    // Add children to the stack in reverse order
-                    // so they're processed in the original order
-                    foreach (var child in GetChildren(fragment).Reverse())
+                    try
                     {
-                        if (child != null)
+                        // Process this fragment
+                        _fragmentCounter++;
+                        fragment.Accept(this);
+                        
+                        // Periodic logging
+                        if (_fragmentCounter % 1000 == 0)
                         {
-                            _processingStack.Push(child);
+                            LogDebug($"Processed {_fragmentCounter} fragments, queue size: {_processingQueue.Count}");
+                        }
+                        
+                        // Add children to the queue
+                        foreach (var child in GetChildren(fragment))
+                        {
+                            if (child != null)
+                            {
+                                _processingQueue.Enqueue(child);
+                            }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    // Log the error but continue processing
-                    LogError($"Error processing {fragment.GetType().Name}", ex);
-                }
-                finally
-                {
-                    // Pop the current fragment from context
-                    Context.PopFragment();
+                    catch (Exception ex)
+                    {
+                        // Log the error but continue processing
+                        LogError($"Error processing {fragment.GetType().Name}", ex);
+                    }
                 }
             }
             
             // Log if processing was stopped
-            if (Context.ShouldStop)
+            if (Context.ShouldStop || _cancellationToken.IsCancellationRequested)
             {
-                LogWarning($"Processing stopped after {Context.FragmentVisitCount} fragments " +
+                LogWarning($"Processing stopped after {_fragmentCounter} fragments " +
                            $"({(DateTime.UtcNow - Context.StartTime).TotalSeconds:F1} seconds)");
+            }
+            else
+            {
+                LogInfo($"Completed processing {_fragmentCounter} fragments in " +
+                        $"{(DateTime.UtcNow - Context.StartTime).TotalSeconds:F1} seconds");
             }
         }
         
         /// <summary>
         /// Default implementation of Visit for recursive traversal
+        /// This should be used with caution for large queries due to potential stack overflow
         /// </summary>
         public override void Visit(TSqlFragment fragment)
         {
@@ -131,7 +169,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
             
             // Check if we should stop processing
             Context.CheckProcessingLimits();
-            if (Context.ShouldStop) return;
+            if (Context.ShouldStop || _cancellationToken.IsCancellationRequested) return;
             
             // Check if already visited
             int fragmentId = RuntimeHelpers.GetHashCode(fragment);
@@ -140,28 +178,31 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
             // Mark as visited
             _visitedFragments.Add(fragmentId);
             
-            // Push the current fragment to context
-            Context.PushFragment(fragment);
-            
-            try
+            // Use the context scope to manage the fragment stack
+            using (Context.CreateFragmentScope(fragment))
             {
-                // Process this fragment normally
-                fragment.Accept(this);
-            }
-            catch (Exception ex)
-            {
-                // Log the error but continue processing
-                LogError($"Error processing {fragment.GetType().Name}", ex);
-            }
-            finally
-            {
-                // Pop the current fragment from context
-                Context.PopFragment();
+                try
+                {
+                    // Process this fragment normally
+                    _fragmentCounter++;
+                    fragment.Accept(this);
+                    
+                    // Periodic logging
+                    if (_fragmentCounter % 1000 == 0)
+                    {
+                        LogDebug($"Processed {_fragmentCounter} fragments");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Log the error but continue processing
+                    LogError($"Error processing {fragment.GetType().Name}", ex);
+                }
             }
         }
         
         /// <summary>
-        /// Gets child elements of an AST fragment
+        /// Gets child elements of an AST fragment using reflection for flexibility
         /// </summary>
         protected IEnumerable<TSqlFragment> GetChildren(TSqlFragment fragment)
         {
@@ -210,18 +251,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
         /// </summary>
         protected string GetSqlText(TSqlFragment fragment)
         {
-            if (fragment == null)
-                return string.Empty;
-
-            var generator = new Sql160ScriptGenerator();
-            var builder = new System.Text.StringBuilder();
-
-            using (var writer = new System.IO.StringWriter(builder))
-            {
-                generator.GenerateScript(fragment, writer);
-            }
-
-            return builder.ToString();
+            return Context.GetSqlText(fragment);
         }
         
         /// <summary>
@@ -229,7 +259,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
         /// </summary>
         protected string CreateNodeId(string prefix, string name)
         {
-            return $"{prefix}_{Guid.NewGuid():N}_{InternString(name).Replace(".", "_")}";
+            return _idGenerator.CreateNodeId(prefix, name);
         }
         
         /// <summary>
@@ -237,7 +267,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
         /// </summary>
         protected string CreateRandomId()
         {
-            return Guid.NewGuid().ToString("N");
+            return _idGenerator.CreateGuidId("ID");
         }
         
         /// <summary>
@@ -245,15 +275,16 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
         /// </summary>
         protected LineageEdge CreateDirectEdge(string sourceId, string targetId, string operation, string sqlExpression = "")
         {
-            return new LineageEdge
-            {
-                Id = CreateRandomId(),
-                SourceId = sourceId,
-                TargetId = targetId,
-                Type = EdgeType.Direct.ToString(),
-                Operation = InternString(operation),
-                SqlExpression = sqlExpression ?? string.Empty
-            };
+            var id = _idGenerator.CreateGuidId("EDGE");
+            operation = _stringPool.Intern(operation);
+            
+            return new LineageEdge(
+                id,
+                sourceId,
+                targetId,
+                EdgeType.Direct.ToString(),
+                operation,
+                sqlExpression);
         }
         
         /// <summary>
@@ -261,15 +292,16 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
         /// </summary>
         protected LineageEdge CreateIndirectEdge(string sourceId, string targetId, string operation, string sqlExpression = "")
         {
-            return new LineageEdge
-            {
-                Id = CreateRandomId(),
-                SourceId = sourceId,
-                TargetId = targetId,
-                Type = EdgeType.Indirect.ToString(),
-                Operation = InternString(operation),
-                SqlExpression = sqlExpression ?? string.Empty
-            };
+            var id = _idGenerator.CreateGuidId("EDGE");
+            operation = _stringPool.Intern(operation);
+            
+            return new LineageEdge(
+                id,
+                sourceId,
+                targetId,
+                EdgeType.Indirect.ToString(),
+                operation,
+                sqlExpression);
         }
         
         /// <summary>
@@ -277,15 +309,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Base
         /// </summary>
         protected string InternString(string str)
         {
-            if (string.IsNullOrEmpty(str))
-                return str;
-                
-            if (!_stringPool.TryGetValue(str, out var internedString))
-            {
-                _stringPool[str] = str;
-                return str;
-            }
-            return internedString;
+            return _stringPool.Intern(str);
         }
         
         /// <summary>

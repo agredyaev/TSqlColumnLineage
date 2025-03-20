@@ -2,9 +2,11 @@ using Microsoft.SqlServer.TransactSql.ScriptDom;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using TSqlColumnLineage.Core.Analysis.Handlers.Base;
 using TSqlColumnLineage.Core.Analysis.Visitors.Base;
 using TSqlColumnLineage.Core.Common.Logging;
+using TSqlColumnLineage.Core.Common.Utils;
 using TSqlColumnLineage.Core.Models.Edges;
 using TSqlColumnLineage.Core.Models.Graph;
 using TSqlColumnLineage.Core.Models.Nodes;
@@ -12,29 +14,51 @@ using TSqlColumnLineage.Core.Models.Nodes;
 namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
 {
     /// <summary>
-    /// Specialized visitor for tracking column lineage in SQL queries
+    /// Specialized visitor for tracking column lineage in SQL queries with optimized performance
     /// </summary>
-    public class ColumnLineageVisitor : BaseVisitor
+    public sealed class ColumnLineageVisitor : BaseVisitor
     {
         private readonly IHandlerRegistry _handlerRegistry;
         
         // Track current query context
         private string _currentSelectAlias;
-        private readonly Stack<TableNode> _tableContextStack = new();
+        
+        // Object pools for reducing allocations
+        private readonly ObjectPool<List<ColumnReferenceExpression>> _columnListPool;
+        private readonly ObjectPool<List<LineageEdge>> _edgeListPool;
         
         /// <summary>
         /// Creates a new column lineage visitor
         /// </summary>
         /// <param name="context">Visitor context</param>
+        /// <param name="stringPool">String pool for memory optimization</param>
+        /// <param name="idGenerator">ID generator</param>
         /// <param name="handlerRegistry">Registry of specialized handlers</param>
         /// <param name="logger">Logger (optional)</param>
+        /// <param name="cancellationToken">Cancellation token for stopping processing</param>
         public ColumnLineageVisitor(
-            VisitorContext context, 
+            VisitorContext context,
+            StringPool stringPool,
+            IdGenerator idGenerator,
             IHandlerRegistry handlerRegistry,
-            ILogger logger = null) 
-            : base(context, logger)
+            ILogger logger = null,
+            CancellationToken cancellationToken = default) 
+            : base(context, stringPool, idGenerator, logger, cancellationToken)
         {
             _handlerRegistry = handlerRegistry ?? throw new ArgumentNullException(nameof(handlerRegistry));
+            
+            // Initialize object pools
+            _columnListPool = new ObjectPool<List<ColumnReferenceExpression>>(
+                () => new List<ColumnReferenceExpression>(),
+                list => list.Clear(),
+                initialCount: 10,
+                maxObjects: 100);
+                
+            _edgeListPool = new ObjectPool<List<LineageEdge>>(
+                () => new List<LineageEdge>(),
+                list => list.Clear(),
+                initialCount: 10,
+                maxObjects: 100);
         }
         
         /// <summary>
@@ -76,12 +100,12 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             // Save current context
             var previousAlias = _currentSelectAlias;
             
+            // Generate a unique alias for this SELECT
+            _currentSelectAlias = InternString($"Select_{CreateRandomId().Substring(0, 8)}");
+            Context.SetState("CurrentSelect", _currentSelectAlias);
+            
             try
             {
-                // Generate a unique alias for this SELECT
-                _currentSelectAlias = $"Select_{CreateRandomId().Substring(0, 8)}";
-                Context.State["CurrentSelect"] = _currentSelectAlias;
-                
                 // Handle TOP clause
                 if (node.QueryExpression is QuerySpecification qs && qs.TopRowFilter != null)
                 {
@@ -91,7 +115,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
                 // Process the INTO clause first if present
                 if (node.Into != null)
                 {
-                    Context.State["HasIntoClause"] = true;
+                    Context.SetState("HasIntoClause", true);
                     Visit(node.Into);
                 }
                 
@@ -123,8 +147,8 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             {
                 // Restore previous context
                 _currentSelectAlias = previousAlias;
-                Context.State.Remove("CurrentSelect");
-                Context.State.Remove("HasIntoClause");
+                Context.SetState("CurrentSelect", null);
+                Context.SetState("HasIntoClause", null);
             }
         }
         
@@ -139,19 +163,19 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             TableNode resultTable = null;
             if (!Context.State.ContainsKey("InsertTargetTable"))
             {
-                resultTable = new TableNode
-                {
-                    Id = CreateNodeId("TABLE", _currentSelectAlias),
-                    Name = _currentSelectAlias,
-                    ObjectName = _currentSelectAlias,
-                    TableType = "DerivedTable"
-                };
+                var id = CreateNodeId("TABLE", _currentSelectAlias);
+                resultTable = new TableNode(
+                    id,
+                    _currentSelectAlias,
+                    "DerivedTable",
+                    objectName: _currentSelectAlias
+                );
                 
                 Graph.AddNode(resultTable);
                 LineageContext.AddTable(resultTable);
                 
                 // Push this table as the current context
-                _tableContextStack.Push(resultTable);
+                LineageContext.CurrentTableContext.Push(resultTable);
             }
             
             try
@@ -165,17 +189,41 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
                 // Then process WHERE, GROUP BY, HAVING
                 if (node.WhereClause != null)
                 {
-                    Visit(node.WhereClause);
+                    Context.SetState("ProcessingWhereClause", true);
+                    try
+                    {
+                        Visit(node.WhereClause);
+                    }
+                    finally
+                    {
+                        Context.SetState("ProcessingWhereClause", null);
+                    }
                 }
                 
                 if (node.GroupByClause != null)
                 {
-                    Visit(node.GroupByClause);
+                    Context.SetState("ProcessingGroupByClause", true);
+                    try
+                    {
+                        Visit(node.GroupByClause);
+                    }
+                    finally
+                    {
+                        Context.SetState("ProcessingGroupByClause", null);
+                    }
                 }
                 
                 if (node.HavingClause != null)
                 {
-                    Visit(node.HavingClause);
+                    Context.SetState("ProcessingHavingClause", true);
+                    try
+                    {
+                        Visit(node.HavingClause);
+                    }
+                    finally
+                    {
+                        Context.SetState("ProcessingHavingClause", null);
+                    }
                 }
                 
                 // Process SELECT elements last, now that we have the full context
@@ -190,9 +238,9 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             finally
             {
                 // Pop table context if we pushed one
-                if (resultTable != null && _tableContextStack.Count > 0)
+                if (resultTable != null && LineageContext.CurrentTableContext.Count > 0)
                 {
-                    _tableContextStack.Pop();
+                    LineageContext.CurrentTableContext.Pop();
                 }
             }
         }
@@ -215,21 +263,20 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             else if (string.IsNullOrEmpty(columnName))
             {
                 // Generate a name for expressions without a column name
-                outputColumn = $"Col_{CreateRandomId().Substring(0, 8)}";
+                outputColumn = InternString($"Col_{CreateRandomId().Substring(0, 8)}");
             }
             
             // Create target column node in result table or insert target
             ColumnNode targetColumn;
             string targetTable;
             
-            if (Context.State.TryGetValue("InsertTargetTable", out var insertTable) && insertTable is string tableName)
+            if (Context.GetState("InsertTargetTable") is string tableName)
             {
                 // This is part of INSERT...SELECT
                 targetTable = tableName;
                 
                 // Try to match with the target column list
-                if (Context.State.TryGetValue("InsertTargetColumns", out var targetCols) && 
-                    targetCols is List<string> targetColumns)
+                if (Context.GetState("InsertTargetColumns") is List<string> targetColumns)
                 {
                     // Find the corresponding target column based on position
                     int index = ((List<SelectElement>)node.Parent)?.IndexOf(node) ?? 0;
@@ -243,10 +290,10 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
                 
                 targetColumn = Context.GetOrCreateColumnNode(targetTable, outputColumn);
             }
-            else if (_tableContextStack.Count > 0)
+            else if (LineageContext.CurrentTableContext.Count > 0)
             {
                 // Regular SELECT
-                targetTable = _tableContextStack.Peek().Name;
+                targetTable = LineageContext.CurrentTableContext.Peek().Name;
                 targetColumn = Context.GetOrCreateColumnNode(targetTable, outputColumn);
             }
             else
@@ -257,7 +304,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             }
             
             // Set current column context for lineage tracking
-            Context.State["CurrentColumn"] = targetColumn;
+            Context.SetColumnContext("current", targetColumn);
             
             try
             {
@@ -276,7 +323,101 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             finally
             {
                 // Clear the column context
-                Context.State.Remove("CurrentColumn");
+                Context.SetColumnContext("current", null);
+            }
+        }
+        
+        /// <summary>
+        /// Process a SELECT * expression
+        /// </summary>
+        public override void ExplicitVisit(SelectStarExpression node)
+        {
+            LogDebug($"Processing SELECT * expression at line {node.StartLine}");
+            
+            // Get qualifier if specified (table name)
+            string tableQualifier = null;
+            if (node.Qualifier != null && node.Qualifier.Identifiers.Count > 0)
+            {
+                tableQualifier = node.Qualifier.Identifiers[0].Value;
+                LogDebug($"SELECT * with qualifier: {tableQualifier}");
+            }
+            
+            // Create target table node for output
+            TableNode targetTable;
+            if (Context.GetState("InsertTargetTable") is string insertTargetName)
+            {
+                // This is INSERT...SELECT
+                targetTable = LineageContext.GetTable(insertTargetName);
+                if (targetTable == null)
+                {
+                    targetTable = Context.GetOrCreateTableNode(insertTargetName);
+                }
+            }
+            else if (LineageContext.CurrentTableContext.Count > 0)
+            {
+                // Regular SELECT
+                targetTable = LineageContext.CurrentTableContext.Peek();
+            }
+            else
+            {
+                // Fallback
+                targetTable = Context.GetOrCreateTableNode("Unknown");
+            }
+            
+            // Find source tables based on qualifier
+            var sourceTables = new List<TableNode>();
+            if (tableQualifier != null)
+            {
+                // If alias is specified, find the specific table
+                var sourceTable = LineageContext.GetTable(tableQualifier);
+                if (sourceTable != null)
+                {
+                    sourceTables.Add(sourceTable);
+                }
+            }
+            else
+            {
+                // No qualifier, include all tables in scope
+                foreach (var table in LineageContext.Tables.Values)
+                {
+                    // Skip the target table
+                    if (table.Id != targetTable.Id)
+                    {
+                        sourceTables.Add(table);
+                    }
+                }
+            }
+            
+            LogDebug($"SELECT * found {sourceTables.Count} source tables");
+            
+            // Create lineage edges from source columns to target
+            foreach (var sourceTable in sourceTables)
+            {
+                // Create direct lineage edges for each column
+                var sourceColumns = Graph.GetNodesOfType<ColumnNode>()
+                    .Where(c => c.TableOwner == sourceTable.Name)
+                    .ToList();
+                
+                LogDebug($"SELECT * processing {sourceColumns.Count} columns from {sourceTable.Name}");
+                
+                foreach (var sourceColumn in sourceColumns)
+                {
+                    // Find or create a corresponding target column
+                    var targetColumn = Context.GetOrCreateColumnNode(
+                        targetTable.Name,
+                        sourceColumn.Name,
+                        sourceColumn.DataType);
+                    
+                    // Create a direct lineage edge
+                    var edge = CreateDirectEdge(
+                        sourceColumn.Id,
+                        targetColumn.Id,
+                        "select",
+                        $"SELECT * column: {sourceColumn.TableOwner}.{sourceColumn.Name} -> {targetColumn.TableOwner}.{targetColumn.Name}");
+                    
+                    Graph.AddEdge(edge);
+                    LogDebug($"Created SELECT * lineage edge: {sourceColumn.TableOwner}.{sourceColumn.Name} -> {targetColumn.TableOwner}.{targetColumn.Name}");
+                }
             }
         }
         
@@ -362,16 +503,15 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             if (expr == null || targetColumn == null) return;
             
             // Create an expression node
-            var expressionNode = new ExpressionNode
-            {
-                Id = CreateNodeId("EXPR", targetColumn.Name),
-                Name = targetColumn.Name,
-                ObjectName = GetSqlText(expr),
-                Expression = GetSqlText(expr),
-                ExpressionType = DetermineExpressionType(expr),
-                ResultType = targetColumn.DataType,
-                TableOwner = targetColumn.TableOwner
-            };
+            var expressionId = CreateNodeId("EXPR", targetColumn.Name);
+            var expressionNode = new ExpressionNode(
+                expressionId,
+                targetColumn.Name,
+                GetSqlText(expr),
+                DetermineExpressionType(expr),
+                targetColumn.DataType,
+                targetColumn.TableOwner
+            );
             
             Graph.AddNode(expressionNode);
             
@@ -386,221 +526,62 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             Graph.AddEdge(targetEdge);
             
             // Extract column references from the expression
-            var columnRefs = new List<ColumnReferenceExpression>();
-            ExtractColumnReferences(expr, columnRefs);
-            
-            // Process each column reference
-            foreach (var colRef in columnRefs)
+            var columnRefs = _columnListPool.Get();
+            try
             {
-                string columnName = colRef.MultiPartIdentifier?.Identifiers.LastOrDefault()?.Value;
-                string tableName = null;
+                ExtractColumnReferences(expr, columnRefs);
                 
-                // If there's a table specifier
-                if (colRef.MultiPartIdentifier?.Identifiers.Count > 1)
+                // Process each column reference
+                foreach (var colRef in columnRefs)
                 {
-                    tableName = colRef.MultiPartIdentifier.Identifiers[0].Value;
+                    string columnName = colRef.MultiPartIdentifier?.Identifiers.LastOrDefault()?.Value;
+                    string tableName = null;
                     
-                    // Resolve alias if needed
-                    if (LineageContext.TableAliases.TryGetValue(tableName, out var resolvedTable))
+                    // If there's a table specifier
+                    if (colRef.MultiPartIdentifier?.Identifiers.Count > 1)
                     {
-                        tableName = resolvedTable;
-                    }
-                }
-                
-                // Get or create the source column node
-                ColumnNode sourceColumn;
-                
-                if (!string.IsNullOrEmpty(tableName))
-                {
-                    // Specific table referenced
-                    sourceColumn = Context.GetOrCreateColumnNode(tableName, columnName);
-                }
-                else
-                {
-                    // Try to infer the table from context
-                    sourceColumn = FindColumnInContext(columnName);
-                }
-                
-                if (sourceColumn != null)
-                {
-                    // Create an indirect lineage edge from source column to expression
-                    var edge = CreateIndirectEdge(
-                        sourceColumn.Id,
-                        expressionNode.Id,
-                        "reference",
-                        $"{sourceColumn.TableOwner}.{sourceColumn.Name} used in {expressionNode.ExpressionType}"
-                    );
-                    
-                    Graph.AddEdge(edge);
-                    LogDebug($"Created indirect lineage edge: {sourceColumn.TableOwner}.{sourceColumn.Name} -> {expressionNode.Name} (Expression)");
-                }
-            }
-        }
-        
-        /// <summary>
-        /// Extracts all column references from an expression
-        /// </summary>
-        private void ExtractColumnReferences(ScalarExpression expr, List<ColumnReferenceExpression> columnRefs)
-        {
-            if (expr == null) return;
-            
-            // Direct column reference
-            if (expr is ColumnReferenceExpression colRef)
-            {
-                columnRefs.Add(colRef);
-                return;
-            }
-            
-            // Binary expressions (e.g., a + b)
-            if (expr is BinaryExpression binaryExpr)
-            {
-                ExtractColumnReferences(binaryExpr.FirstExpression, columnRefs);
-                ExtractColumnReferences(binaryExpr.SecondExpression, columnRefs);
-                return;
-            }
-            
-            // Function calls
-            if (expr is FunctionCall functionCall)
-            {
-                foreach (var parameter in functionCall.Parameters)
-                {
-                    if (parameter is ScalarExpression scalarParam)
-                    {
-                        ExtractColumnReferences(scalarParam, columnRefs);
-                    }
-                }
-                return;
-            }
-            
-            // Parentheses
-            if (expr is ParenthesisExpression parenExpr)
-            {
-                ExtractColumnReferences(parenExpr.Expression, columnRefs);
-                return;
-            }
-            
-            // Unary expressions
-            if (expr is UnaryExpression unaryExpr)
-            {
-                ExtractColumnReferences(unaryExpr.Expression, columnRefs);
-                return;
-            }
-            
-            // CASE expressions
-            if (expr is SearchedCaseExpression caseExpr)
-            {
-                foreach (var whenClause in caseExpr.WhenClauses)
-                {
-                    ExtractColumnReferencesFromBooleanExpression(whenClause.WhenExpression, columnRefs);
-                    ExtractColumnReferences(whenClause.ThenExpression, columnRefs);
-                }
-                
-                if (caseExpr.ElseExpression != null)
-                {
-                    ExtractColumnReferences(caseExpr.ElseExpression, columnRefs);
-                }
-                return;
-            }
-            
-            // Simple CASE
-            if (expr is SimpleCaseExpression simpleCaseExpr)
-            {
-                ExtractColumnReferences(simpleCaseExpr.InputExpression, columnRefs);
-                
-                foreach (var whenClause in simpleCaseExpr.WhenClauses)
-                {
-                    ExtractColumnReferences(whenClause.WhenExpression, columnRefs);
-                    ExtractColumnReferences(whenClause.ThenExpression, columnRefs);
-                }
-                
-                if (simpleCaseExpr.ElseExpression != null)
-                {
-                    ExtractColumnReferences(simpleCaseExpr.ElseExpression, columnRefs);
-                }
-                return;
-            }
-            
-            // Other expressions might have their own ways to reference columns
-        }
-        
-        /// <summary>
-        /// Extracts column references from boolean expressions (WHERE, JOIN conditions, etc.)
-        /// </summary>
-        private void ExtractColumnReferencesFromBooleanExpression(BooleanExpression expr, List<ColumnReferenceExpression> columnRefs)
-        {
-            if (expr == null) return;
-            
-            // Comparison (a = b)
-            if (expr is BooleanComparisonExpression comparisonExpr)
-            {
-                ExtractColumnReferences(comparisonExpr.FirstExpression, columnRefs);
-                ExtractColumnReferences(comparisonExpr.SecondExpression, columnRefs);
-                return;
-            }
-            
-            // Binary boolean (AND, OR)
-            if (expr is BooleanBinaryExpression binaryExpr)
-            {
-                ExtractColumnReferencesFromBooleanExpression(binaryExpr.FirstExpression, columnRefs);
-                ExtractColumnReferencesFromBooleanExpression(binaryExpr.SecondExpression, columnRefs);
-                return;
-            }
-            
-            // Parentheses
-            if (expr is BooleanParenthesisExpression parenExpr)
-            {
-                ExtractColumnReferencesFromBooleanExpression(parenExpr.Expression, columnRefs);
-                return;
-            }
-            
-            // NOT
-            if (expr is BooleanNotExpression notExpr)
-            {
-                ExtractColumnReferencesFromBooleanExpression(notExpr.Expression, columnRefs);
-                return;
-            }
-            
-            // IS NULL
-            if (expr is BooleanIsNullExpression isNullExpr)
-            {
-                ExtractColumnReferences(isNullExpr.Expression, columnRefs);
-                return;
-            }
-            
-            // IN
-            if (expr is InPredicate inExpr)
-            {
-                ExtractColumnReferences(inExpr.Expression, columnRefs);
-                
-                if (inExpr.SubQuery != null)
-                {
-                    Visit(inExpr.SubQuery);
-                }
-                
-                if (inExpr.Values != null)
-                {
-                    foreach (var value in inExpr.Values)
-                    {
-                        if (value is ScalarExpression valueExpr)
+                        tableName = colRef.MultiPartIdentifier.Identifiers[0].Value;
+                        
+                        // Resolve alias if needed
+                        if (LineageContext.TableAliases.TryGetValue(tableName, out var resolvedTable))
                         {
-                            ExtractColumnReferences(valueExpr, columnRefs);
+                            tableName = resolvedTable;
                         }
                     }
+                    
+                    // Get or create the source column node
+                    ColumnNode sourceColumn;
+                    
+                    if (!string.IsNullOrEmpty(tableName))
+                    {
+                        // Specific table referenced
+                        sourceColumn = Context.GetOrCreateColumnNode(tableName, columnName);
+                    }
+                    else
+                    {
+                        // Try to infer the table from context
+                        sourceColumn = FindColumnInContext(columnName);
+                    }
+                    
+                    if (sourceColumn != null)
+                    {
+                        // Create an indirect lineage edge from source column to expression
+                        var edge = CreateIndirectEdge(
+                            sourceColumn.Id,
+                            expressionNode.Id,
+                            "reference",
+                            $"{sourceColumn.TableOwner}.{sourceColumn.Name} used in {expressionNode.ExpressionType}"
+                        );
+                        
+                        Graph.AddEdge(edge);
+                        LogDebug($"Created indirect lineage edge: {sourceColumn.TableOwner}.{sourceColumn.Name} -> {expressionNode.Name} (Expression)");
+                    }
                 }
-                return;
             }
-            
-            // LIKE
-            if (expr is LikePredicate likeExpr)
+            finally
             {
-                ExtractColumnReferences(likeExpr.FirstExpression, columnRefs);
-                ExtractColumnReferences(likeExpr.SecondExpression, columnRefs);
-                
-                if (likeExpr.EscapeExpression != null)
-                {
-                    ExtractColumnReferences(likeExpr.EscapeExpression, columnRefs);
-                }
-                return;
+                // Return the column list to the pool
+                _columnListPool.Return(columnRefs);
             }
         }
         
@@ -617,6 +598,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             if (expr is CoalesceExpression) return "Coalesce";
             if (expr is NullIfExpression) return "NullIf";
             if (expr is CastCall) return "Cast";
+            if (expr is ConvertCall) return "Convert";
             
             return "Expression";
         }
@@ -689,25 +671,32 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             // Process join condition
             if (node.SearchCondition != null)
             {
-                Context.State["InJoinCondition"] = true;
+                Context.SetState("InJoinCondition", true);
                 
                 try
                 {
                     Visit(node.SearchCondition);
                     
                     // Extract column references in join condition
-                    var columnRefs = new List<ColumnReferenceExpression>();
-                    ExtractJoinColumnReferences(node.SearchCondition, columnRefs);
-                    
-                    // Create join edges between columns
-                    if (columnRefs.Count >= 2)
+                    var columnRefs = _columnListPool.Get();
+                    try
                     {
-                        ProcessJoinColumns(columnRefs, node.QualifiedJoinType.ToString());
+                        ExtractJoinColumnReferences(node.SearchCondition, columnRefs);
+                        
+                        // Create join edges between columns
+                        if (columnRefs.Count >= 2)
+                        {
+                            ProcessJoinColumns(columnRefs, node.QualifiedJoinType.ToString());
+                        }
+                    }
+                    finally
+                    {
+                        _columnListPool.Return(columnRefs);
                     }
                 }
                 finally
                 {
-                    Context.State.Remove("InJoinCondition");
+                    Context.SetState("InJoinCondition", null);
                 }
             }
         }
@@ -778,26 +767,40 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             {
                 // Create join edges between tables
                 var tables = columnsByTable.Keys.ToList();
+                var edges = _edgeListPool.Get();
                 
-                for (int i = 0; i < tables.Count - 1; i++)
+                try
                 {
-                    for (int j = i + 1; j < tables.Count; j++)
+                    for (int i = 0; i < tables.Count - 1; i++)
                     {
-                        var leftTableName = tables[i];
-                        var rightTableName = tables[j];
-                        
-                        var leftColumns = columnsByTable[leftTableName];
-                        var rightColumns = columnsByTable[rightTableName];
-                        
-                        // Find matching column pairs
-                        for (int li = 0; li < leftColumns.Count; li++)
+                        for (int j = i + 1; j < tables.Count; j++)
                         {
-                            for (int ri = 0; ri < rightColumns.Count; ri++)
+                            var leftTableName = tables[i];
+                            var rightTableName = tables[j];
+                            
+                            var leftColumns = columnsByTable[leftTableName];
+                            var rightColumns = columnsByTable[rightTableName];
+                            
+                            // Find matching column pairs
+                            for (int li = 0; li < leftColumns.Count; li++)
                             {
-                                CreateJoinEdge(leftColumns[li], rightColumns[ri], joinType);
+                                for (int ri = 0; ri < rightColumns.Count; ri++)
+                                {
+                                    CreateJoinEdge(leftColumns[li], rightColumns[ri], joinType, edges);
+                                }
                             }
                         }
                     }
+                    
+                    // Add all accumulated edges to the graph
+                    foreach (var edge in edges)
+                    {
+                        Graph.AddEdge(edge);
+                    }
+                }
+                finally
+                {
+                    _edgeListPool.Return(edges);
                 }
             }
         }
@@ -805,7 +808,7 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
         /// <summary>
         /// Creates a join edge between two columns
         /// </summary>
-        private void CreateJoinEdge(ColumnReferenceExpression leftCol, ColumnReferenceExpression rightCol, string joinType)
+        private void CreateJoinEdge(ColumnReferenceExpression leftCol, ColumnReferenceExpression rightCol, string joinType, List<LineageEdge> edges)
         {
             string leftColumnName = leftCol.MultiPartIdentifier?.Identifiers.LastOrDefault()?.Value;
             string leftTableName = leftCol.MultiPartIdentifier?.Identifiers.Count > 1 
@@ -836,29 +839,26 @@ namespace TSqlColumnLineage.Core.Analysis.Visitors.Specialized
             
             if (leftColumnNode == null || rightColumnNode == null) return;
             
+            joinType = InternString(joinType.ToLowerInvariant());
+            
             // Create join edges in both directions
-            var leftToRightEdge = new LineageEdge
-            {
-                Id = CreateRandomId(),
-                SourceId = leftColumnNode.Id,
-                TargetId = rightColumnNode.Id,
-                Type = EdgeType.Join.ToString(),
-                Operation = joinType.ToLowerInvariant(),
-                SqlExpression = $"{leftTableName}.{leftColumnName} = {rightTableName}.{rightColumnName}"
-            };
+            edges.Add(new LineageEdge(
+                _idGenerator.CreateGuidId("EDGE"),
+                leftColumnNode.Id,
+                rightColumnNode.Id,
+                EdgeType.Join.ToString(),
+                joinType,
+                $"{leftTableName}.{leftColumnName} = {rightTableName}.{rightColumnName}"
+            ));
             
-            var rightToLeftEdge = new LineageEdge
-            {
-                Id = CreateRandomId(),
-                SourceId = rightColumnNode.Id,
-                TargetId = leftColumnNode.Id,
-                Type = EdgeType.Join.ToString(),
-                Operation = joinType.ToLowerInvariant(),
-                SqlExpression = $"{rightTableName}.{rightColumnName} = {leftTableName}.{leftColumnName}"
-            };
-            
-            Graph.AddEdge(leftToRightEdge);
-            Graph.AddEdge(rightToLeftEdge);
+            edges.Add(new LineageEdge(
+                _idGenerator.CreateGuidId("EDGE"),
+                rightColumnNode.Id,
+                leftColumnNode.Id,
+                EdgeType.Join.ToString(),
+                joinType,
+                $"{rightTableName}.{rightColumnName} = {leftTableName}.{leftColumnName}"
+            ));
             
             LogDebug($"Created JOIN edges between {leftTableName}.{leftColumnName} and {rightTableName}.{rightColumnName}");
         }

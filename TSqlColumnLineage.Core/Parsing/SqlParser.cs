@@ -4,51 +4,74 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using TSqlColumnLineage.Core.Common.Logging;
+using TSqlColumnLineage.Core.Common.Utils;
 using TSqlColumnLineage.Core.Models.Graph;
 using TSqlColumnLineage.Core.Parsing.Exceptions;
 
 namespace TSqlColumnLineage.Core.Parsing
 {
     /// <summary>
-    /// Class for parsing T-SQL queries using ScriptDom
+    /// Enhanced parser for T-SQL scripts with improved performance and memory efficiency
     /// </summary>
-    public class SqlParser
+    public sealed class SqlParser
     {
         private readonly SqlServerVersion _sqlServerVersion;
         private readonly bool _initialQuotedIdentifiers;
         private readonly int _batchSizeLimitBytes;
+        private readonly ILogger _logger;
+        private readonly StringPool _stringPool;
         
         // Performance statistics
         private int _totalParseCount = 0;
         private long _totalParseTimeMs = 0;
         private int _totalScriptSizeBytes = 0;
+        private int _maxScriptSizeBytes = 0;
+        
+        // Object pool for script generators to reduce allocations
+        private readonly ObjectPool<Sql160ScriptGenerator> _scriptGeneratorPool;
 
         /// <summary>
         /// Initializes a new instance of the SqlParser
         /// </summary>
         /// <param name="sqlServerVersion">SQL Server version for parsing</param>
+        /// <param name="stringPool">String pool for memory optimization</param>
         /// <param name="initialQuotedIdentifiers">Indicates if quoted identifiers are initially enabled</param>
         /// <param name="batchSizeLimitBytes">Maximum size of batch in bytes (0 for no limit)</param>
+        /// <param name="logger">Logger for diagnostic information</param>
         public SqlParser(
-            SqlServerVersion sqlServerVersion = SqlServerVersion.Latest,
+            SqlServerVersion sqlServerVersion,
+            StringPool stringPool,
             bool initialQuotedIdentifiers = true,
-            int batchSizeLimitBytes = 10 * 1024 * 1024)  // Default 10MB
+            int batchSizeLimitBytes = 10 * 1024 * 1024,  // Default 10MB
+            ILogger logger = null)
         {
             _sqlServerVersion = sqlServerVersion;
             _initialQuotedIdentifiers = initialQuotedIdentifiers;
             _batchSizeLimitBytes = batchSizeLimitBytes;
+            _logger = logger;
+            _stringPool = stringPool ?? throw new ArgumentNullException(nameof(stringPool));
+            
+            // Initialize the script generator pool
+            _scriptGeneratorPool = new ObjectPool<Sql160ScriptGenerator>(
+                () => new Sql160ScriptGenerator(),
+                initialCount: 2,
+                maxObjects: 10);
         }
         
         /// <summary>
         /// Gets parser performance statistics
         /// </summary>
-        public (int ParseCount, long TotalTimeMs, double AvgTimeMs, int TotalSizeBytes) 
+        public (int ParseCount, long TotalTimeMs, double AvgTimeMs, int TotalSizeBytes, int MaxSizeBytes) 
             GetPerformanceStatistics() =>
             (
                 _totalParseCount,
                 _totalParseTimeMs,
                 _totalParseCount > 0 ? (double)_totalParseTimeMs / _totalParseCount : 0,
-                _totalScriptSizeBytes
+                _totalScriptSizeBytes,
+                _maxScriptSizeBytes
             );
 
         /// <summary>
@@ -84,17 +107,42 @@ namespace TSqlColumnLineage.Core.Parsing
                 TSqlFragment result = parser.Parse(reader, out errors);
                 
                 // Update performance stats
-                _totalParseCount++;
-                _totalParseTimeMs += (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
-                _totalScriptSizeBytes += scriptSizeBytes;
+                Interlocked.Increment(ref _totalParseCount);
+                Interlocked.Add(ref _totalParseTimeMs, (long)(DateTime.UtcNow - startTime).TotalMilliseconds);
+                Interlocked.Add(ref _totalScriptSizeBytes, scriptSizeBytes);
+                
+                // Track maximum script size
+                var currentMax = _maxScriptSizeBytes;
+                while (scriptSizeBytes > currentMax)
+                {
+                    var newMax = Interlocked.CompareExchange(ref _maxScriptSizeBytes, scriptSizeBytes, currentMax);
+                    if (newMax == currentMax) break;
+                    currentMax = newMax;
+                }
 
                 if (errors.Count > 0)
                 {
                     throw new SqlParsingException("SQL parsing failed", errors, sqlQuery);
                 }
 
+                _logger?.LogDebug($"Parsed SQL query ({scriptSizeBytes/1024} KB) in {(DateTime.UtcNow - startTime).TotalMilliseconds}ms");
                 return result;
             }
+        }
+        
+        /// <summary>
+        /// Asynchronously parses a SQL query
+        /// </summary>
+        /// <param name="sqlQuery">SQL query to parse</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Task containing the root AST fragment</returns>
+        public async Task<TSqlFragment> ParseAsync(string sqlQuery, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(sqlQuery))
+                throw new ArgumentException("SQL query cannot be null or empty", nameof(sqlQuery));
+                
+            // Use Task.Run to run the parse operation on a background thread
+            return await Task.Run(() => Parse(sqlQuery), cancellationToken);
         }
 
         /// <summary>
@@ -124,15 +172,16 @@ namespace TSqlColumnLineage.Core.Parsing
                     fragment = parser.Parse(reader, out errors);
                     
                     // Update performance stats
-                    _totalParseCount++;
-                    _totalParseTimeMs += (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
-                    _totalScriptSizeBytes += Encoding.UTF8.GetByteCount(sqlQuery);
+                    Interlocked.Increment(ref _totalParseCount);
+                    Interlocked.Add(ref _totalParseTimeMs, (long)(DateTime.UtcNow - startTime).TotalMilliseconds);
+                    Interlocked.Add(ref _totalScriptSizeBytes, Encoding.UTF8.GetByteCount(sqlQuery));
                     
                     return errors.Count == 0;
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                _logger?.LogError(ex, "Error parsing SQL query");
                 fragment = null;
                 return false;
             }
@@ -173,9 +222,9 @@ namespace TSqlColumnLineage.Core.Parsing
                 TSqlFragment fragment = parser.Parse(reader, out errors);
                 
                 // Update performance stats
-                _totalParseCount++;
-                _totalParseTimeMs += (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
-                _totalScriptSizeBytes += Encoding.UTF8.GetByteCount(sqlBatch);
+                Interlocked.Increment(ref _totalParseCount);
+                Interlocked.Add(ref _totalParseTimeMs, (long)(DateTime.UtcNow - startTime).TotalMilliseconds);
+                Interlocked.Add(ref _totalScriptSizeBytes, Encoding.UTF8.GetByteCount(sqlBatch));
 
                 if (errors.Count > 0)
                 {
@@ -200,6 +249,74 @@ namespace TSqlColumnLineage.Core.Parsing
         }
         
         /// <summary>
+        /// Parses a large SQL script in parallel batches to reduce memory usage and improve performance
+        /// </summary>
+        /// <param name="sqlScript">SQL script to parse</param>
+        /// <param name="maxDegreeOfParallelism">Maximum number of parallel parsing operations (default: CPU count)</param>
+        /// <param name="cancellationToken">Cancellation token for stopping processing</param>
+        /// <returns>Collection of statements from the script</returns>
+        public async Task<List<TSqlStatement>> ParseLargeScriptParallelAsync(
+            string sqlScript, 
+            int maxDegreeOfParallelism = 0,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(sqlScript))
+                return new List<TSqlStatement>();
+            
+            // Set default parallelism to processor count
+            if (maxDegreeOfParallelism <= 0)
+            {
+                maxDegreeOfParallelism = Environment.ProcessorCount;
+            }
+            
+            // Split the script into batches (separated by GO statements)
+            var batches = SplitSqlIntoBatches(sqlScript).ToList();
+            _logger?.LogDebug($"Split script into {batches.Count} batches for parallel processing");
+            
+            // Create a throttled parallel task scheduler
+            var throttler = new SemaphoreSlim(maxDegreeOfParallelism);
+            var tasks = new List<Task<IEnumerable<TSqlStatement>>>();
+            
+            foreach (var batch in batches)
+            {
+                // Skip empty batches
+                if (string.IsNullOrWhiteSpace(batch))
+                    continue;
+                
+                // Wait for throttling semaphore
+                await throttler.WaitAsync(cancellationToken);
+                
+                // Start parallel task
+                tasks.Add(Task.Run(() =>
+                {
+                    try
+                    {
+                        // Parse batch on background thread
+                        return ParseBatch(batch);
+                    }
+                    finally
+                    {
+                        // Release throttling semaphore
+                        throttler.Release();
+                    }
+                }, cancellationToken));
+            }
+            
+            // Wait for all parsing tasks to complete
+            var results = await Task.WhenAll(tasks);
+            
+            // Combine all results
+            var allStatements = new List<TSqlStatement>();
+            foreach (var batchResults in results)
+            {
+                allStatements.AddRange(batchResults);
+            }
+            
+            _logger?.LogDebug($"Parallel parsing complete, found {allStatements.Count} statements");
+            return allStatements;
+        }
+        
+        /// <summary>
         /// Parses a large SQL script in chunks to reduce memory usage
         /// </summary>
         /// <param name="sqlScript">SQL script to parse</param>
@@ -212,7 +329,7 @@ namespace TSqlColumnLineage.Core.Parsing
                 
             var parseResults = new List<TSqlStatement>();
             
-            // Try to split the script at batch separators (GO statements)
+            // Split the script at batch separators (GO statements)
             var batches = SplitSqlIntoBatches(sqlScript);
             
             foreach (var batch in batches)
@@ -228,8 +345,8 @@ namespace TSqlColumnLineage.Core.Parsing
                 else
                 {
                     // Need to further split this large batch
-                    // Note: This is a simplistic approach and might not work for all scripts
                     var chunks = SplitBatchIntoChunks(batch, chunkSize);
+                    _logger?.LogDebug($"Split large batch ({batch.Length} chars) into {chunks.Count()} chunks");
                     
                     foreach (var chunk in chunks)
                     {
@@ -243,7 +360,7 @@ namespace TSqlColumnLineage.Core.Parsing
                         catch (SqlParsingException ex)
                         {
                             // Log the error but continue with next chunk
-                            Console.Error.WriteLine($"Error parsing chunk: {ex.Message}");
+                            _logger?.LogWarning($"Error parsing chunk: {ex.Message}");
                         }
                     }
                 }
@@ -251,7 +368,7 @@ namespace TSqlColumnLineage.Core.Parsing
         }
         
         /// <summary>
-        /// Splits a SQL script into batches by GO statements
+        /// Splits a SQL script into batches by GO statements using StringPool for memory efficiency
         /// </summary>
         private IEnumerable<string> SplitSqlIntoBatches(string sqlScript)
         {
@@ -269,7 +386,7 @@ namespace TSqlColumnLineage.Core.Parsing
                     string batch = currentBatch.ToString().Trim();
                     if (!string.IsNullOrWhiteSpace(batch))
                     {
-                        yield return batch;
+                        yield return _stringPool.Intern(batch);
                     }
                     
                     currentBatch.Clear();
@@ -284,12 +401,12 @@ namespace TSqlColumnLineage.Core.Parsing
             string finalBatch = currentBatch.ToString().Trim();
             if (!string.IsNullOrWhiteSpace(finalBatch))
             {
-                yield return finalBatch;
+                yield return _stringPool.Intern(finalBatch);
             }
         }
         
         /// <summary>
-        /// Splits a large batch into smaller chunks at statement boundaries
+        /// Splits a large batch into smaller chunks at statement boundaries for more efficient parsing
         /// </summary>
         private IEnumerable<string> SplitBatchIntoChunks(string batch, int chunkSize)
         {
@@ -299,106 +416,79 @@ namespace TSqlColumnLineage.Core.Parsing
                 yield break;
             }
             
-            // Try to split at statement boundaries (;)
-            int startPos = 0;
-            int nextSemicolon;
+            // Common statement terminators to split on
+            string[] terminators = { ";", "END", "END;", "GO", "RETURN", "RETURN;" };
             
+            int startPos = 0;
             var currentChunk = new StringBuilder();
             
             while (startPos < batch.Length)
             {
-                // Find next statement boundary
-                nextSemicolon = batch.IndexOf(';', startPos);
+                // Find the next terminator after the current position
+                int nextTerminatorPos = int.MaxValue;
+                string matchedTerminator = null;
                 
-                if (nextSemicolon == -1 || nextSemicolon - startPos > chunkSize)
+                foreach (var terminator in terminators)
                 {
-                    // No semicolon found or too far away, need to find another boundary
+                    var pos = batch.IndexOf(terminator, startPos, StringComparison.OrdinalIgnoreCase);
+                    if (pos >= 0 && pos < nextTerminatorPos)
+                    {
+                        nextTerminatorPos = pos;
+                        matchedTerminator = terminator;
+                    }
+                }
+                
+                // If no terminator found, or it would make chunk too large
+                if (nextTerminatorPos == int.MaxValue || 
+                    nextTerminatorPos - startPos > chunkSize)
+                {
+                    // Find a good break point based on statement boundaries
                     int endPos = Math.Min(startPos + chunkSize, batch.Length);
                     
-                    // Try to find a good break point (whitespace after certain keywords)
-                    string[] breakKeywords = { "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP" };
-                    int bestBreakPoint = -1;
-                    
-                    foreach (var keyword in breakKeywords)
+                    // Try to break at whitespace
+                    int breakPos = batch.LastIndexOfAny(new[] { ' ', '\t', '\r', '\n' }, endPos - 1, Math.Min(50, endPos - startPos));
+                    if (breakPos > startPos)
                     {
-                        // Look for keyword followed by whitespace
-                        string pattern = keyword + " ";
-                        int keywordPos = batch.LastIndexOf(pattern, endPos, StringComparison.OrdinalIgnoreCase);
-                        
-                        if (keywordPos > startPos && keywordPos > bestBreakPoint)
-                        {
-                            bestBreakPoint = keywordPos;
-                        }
+                        endPos = breakPos + 1;  // Include the whitespace character
                     }
                     
-                    if (bestBreakPoint > startPos)
-                    {
-                        // Found a keyword to break at
-                        currentChunk.Append(batch.Substring(startPos, bestBreakPoint - startPos));
-                        yield return currentChunk.ToString();
-                        currentChunk.Clear();
-                        startPos = bestBreakPoint;
-                    }
-                    else if (endPos < batch.Length)
-                    {
-                        // Just break at the character limit
-                        currentChunk.Append(batch.Substring(startPos, endPos - startPos));
-                        yield return currentChunk.ToString();
-                        currentChunk.Clear();
-                        startPos = endPos;
-                    }
-                    else
-                    {
-                        // This is the last piece
-                        currentChunk.Append(batch.Substring(startPos));
-                        yield return currentChunk.ToString();
-                        break;
-                    }
+                    // Add the chunk
+                    currentChunk.Append(batch.Substring(startPos, endPos - startPos));
+                    var chunk = _stringPool.Intern(currentChunk.ToString());
+                    currentChunk.Clear();
+                    
+                    yield return chunk;
+                    startPos = endPos;
                 }
                 else
                 {
-                    // Found a semicolon, include it in the chunk
-                    int statementLength = (nextSemicolon + 1) - startPos;
-                    string statement = batch.Substring(startPos, statementLength);
+                    // Add the statement up to and including the terminator
+                    int statementLength = (nextTerminatorPos + matchedTerminator.Length) - startPos;
                     
-                    if (currentChunk.Length + statementLength > chunkSize)
-                    {
-                        // Current statement would make chunk too large, yield current chunk first
-                        if (currentChunk.Length > 0)
-                        {
-                            yield return currentChunk.ToString();
-                            currentChunk.Clear();
-                        }
-                        
-                        // Now add this statement to the new chunk
-                        currentChunk.Append(statement);
-                    }
-                    else
-                    {
-                        // Add to current chunk
-                        currentChunk.Append(statement);
-                    }
+                    currentChunk.Append(batch.Substring(startPos, statementLength));
                     
-                    startPos = nextSemicolon + 1;
-                    
-                    // If chunk is getting large, yield it
+                    // If adding this statement would exceed the chunk size, yield the current chunk
                     if (currentChunk.Length >= chunkSize)
                     {
-                        yield return currentChunk.ToString();
+                        var chunk = _stringPool.Intern(currentChunk.ToString());
                         currentChunk.Clear();
+                        
+                        yield return chunk;
                     }
+                    
+                    startPos += statementLength;
                 }
             }
             
-            // Return any remaining text
+            // Return any remaining content
             if (currentChunk.Length > 0)
             {
-                yield return currentChunk.ToString();
+                yield return _stringPool.Intern(currentChunk.ToString());
             }
         }
 
         /// <summary>
-        /// Gets the original SQL text from an AST fragment
+        /// Gets the original SQL text from an AST fragment using a pooled script generator
         /// </summary>
         /// <param name="fragment">AST fragment</param>
         /// <returns>Original SQL text</returns>
@@ -407,15 +497,24 @@ namespace TSqlColumnLineage.Core.Parsing
             if (fragment == null)
                 return string.Empty;
 
-            Sql160ScriptGenerator scriptGenerator = new Sql160ScriptGenerator();
-            StringBuilder sb = new StringBuilder();
+            // Get a script generator from the pool
+            var scriptGenerator = _scriptGeneratorPool.Get();
+            var sb = new StringBuilder();
 
-            using (StringWriter writer = new StringWriter(sb))
+            try
             {
-                scriptGenerator.GenerateScript(fragment, writer);
+                using (StringWriter writer = new StringWriter(sb))
+                {
+                    scriptGenerator.GenerateScript(fragment, writer);
+                }
+                
+                return _stringPool.Intern(sb.ToString());
             }
-
-            return sb.ToString();
+            finally
+            {
+                // Return the script generator to the pool
+                _scriptGeneratorPool.Return(scriptGenerator);
+            }
         }
     }
 }

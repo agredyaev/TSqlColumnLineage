@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using TSqlColumnLineage.Core.Analysis.Visitors.Base;
 using TSqlColumnLineage.Core.Common.Logging;
+using TSqlColumnLineage.Core.Common.Utils;
 using TSqlColumnLineage.Core.Models.Edges;
 using TSqlColumnLineage.Core.Models.Graph;
 using TSqlColumnLineage.Core.Models.Nodes;
@@ -11,7 +12,7 @@ using TSqlColumnLineage.Core.Models.Nodes;
 namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
 {
     /// <summary>
-    /// Abstract base class for SQL query handlers
+    /// Abstract base class for SQL query handlers with optimized performance and memory usage
     /// </summary>
     public abstract class AbstractQueryHandler : IQueryHandler
     {
@@ -38,21 +39,29 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
         /// <summary>
         /// String pool for memory optimization
         /// </summary>
-        private readonly Dictionary<string, string> _stringPool = new();
+        private readonly StringPool _stringPool;
+        
+        /// <summary>
+        /// ID generator for creating node and edge IDs
+        /// </summary>
+        private readonly IdGenerator _idGenerator;
         
         /// <summary>
         /// Create a new query handler
         /// </summary>
         /// <param name="context">Visitor context</param>
-
-/// <summary>
-        /// Create a new query handler
-        /// </summary>
-        /// <param name="context">Visitor context</param>
+        /// <param name="stringPool">String pool for memory optimization</param>
+        /// <param name="idGenerator">ID generator</param>
         /// <param name="logger">Logger (optional)</param>
-        protected AbstractQueryHandler(VisitorContext context, ILogger logger = null)
+        protected AbstractQueryHandler(
+            VisitorContext context, 
+            StringPool stringPool,
+            IdGenerator idGenerator,
+            ILogger logger = null)
         {
             Context = context ?? throw new ArgumentNullException(nameof(context));
+            _stringPool = stringPool ?? throw new ArgumentNullException(nameof(stringPool));
+            _idGenerator = idGenerator ?? throw new ArgumentNullException(nameof(idGenerator));
             Logger = logger;
         }
 
@@ -76,18 +85,7 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
         /// </summary>
         protected string GetSqlText(TSqlFragment fragment)
         {
-            if (fragment == null)
-                return string.Empty;
-
-            var generator = new Sql160ScriptGenerator();
-            var builder = new System.Text.StringBuilder();
-
-            using (var writer = new System.IO.StringWriter(builder))
-            {
-                generator.GenerateScript(fragment, writer);
-            }
-
-            return builder.ToString();
+            return Context.GetSqlText(fragment);
         }
         
         /// <summary>
@@ -95,7 +93,7 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
         /// </summary>
         protected string CreateNodeId(string prefix, string name)
         {
-            return $"{prefix}_{Guid.NewGuid():N}_{InternString(name).Replace(".", "_")}";
+            return _idGenerator.CreateNodeId(prefix, name);
         }
         
         /// <summary>
@@ -103,7 +101,7 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
         /// </summary>
         protected string CreateRandomId()
         {
-            return Guid.NewGuid().ToString("N");
+            return _idGenerator.CreateGuidId("ID");
         }
         
         /// <summary>
@@ -111,15 +109,16 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
         /// </summary>
         protected LineageEdge CreateDirectEdge(string sourceId, string targetId, string operation, string sqlExpression = "")
         {
-            return new LineageEdge
-            {
-                Id = CreateRandomId(),
-                SourceId = sourceId,
-                TargetId = targetId,
-                Type = EdgeType.Direct.ToString(),
-                Operation = InternString(operation),
-                SqlExpression = sqlExpression ?? string.Empty
-            };
+            var id = _idGenerator.CreateGuidId("EDGE");
+            operation = _stringPool.Intern(operation);
+            
+            return new LineageEdge(
+                id,
+                sourceId,
+                targetId,
+                EdgeType.Direct.ToString(),
+                operation,
+                sqlExpression);
         }
         
         /// <summary>
@@ -127,15 +126,16 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
         /// </summary>
         protected LineageEdge CreateIndirectEdge(string sourceId, string targetId, string operation, string sqlExpression = "")
         {
-            return new LineageEdge
-            {
-                Id = CreateRandomId(),
-                SourceId = sourceId,
-                TargetId = targetId,
-                Type = EdgeType.Indirect.ToString(),
-                Operation = InternString(operation),
-                SqlExpression = sqlExpression ?? string.Empty
-            };
+            var id = _idGenerator.CreateGuidId("EDGE");
+            operation = _stringPool.Intern(operation);
+            
+            return new LineageEdge(
+                id,
+                sourceId,
+                targetId,
+                EdgeType.Indirect.ToString(),
+                operation,
+                sqlExpression);
         }
         
         /// <summary>
@@ -143,15 +143,7 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
         /// </summary>
         protected string InternString(string str)
         {
-            if (string.IsNullOrEmpty(str))
-                return str;
-                
-            if (!_stringPool.TryGetValue(str, out var internedString))
-            {
-                _stringPool[str] = str;
-                return str;
-            }
-            return internedString;
+            return _stringPool.Intern(str);
         }
         
         /// <summary>
@@ -268,6 +260,27 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
                 }
                 return;
             }
+            
+            // COALESCE
+            if (expr is CoalesceExpression coalesceExpr)
+            {
+                foreach (var e in coalesceExpr.Expressions)
+                {
+                    ExtractColumnReferences(e, columnRefs);
+                }
+            }
+            
+            // CONVERT
+            if (expr is ConvertCall convertExpr)
+            {
+                ExtractColumnReferences(convertExpr.Parameter, columnRefs);
+            }
+            
+            // CAST
+            if (expr is CastCall castExpr)
+            {
+                ExtractColumnReferences(castExpr.Parameter, columnRefs);
+            }
         }
         
         /// <summary>
@@ -342,6 +355,13 @@ namespace TSqlColumnLineage.Core.Analysis.Handlers.Base
                 {
                     ExtractColumnReferences(likeExpr.EscapeExpression, columnRefs);
                 }
+                return;
+            }
+            
+            // EXISTS
+            if (expr is ExistsPredicate existsExpr && existsExpr.Subquery != null)
+            {
+                // We handle this differently - the visitor will visit the subquery
                 return;
             }
         }
