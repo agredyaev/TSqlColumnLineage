@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("TSqlColumnLineage.Core")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+004cbb45f7d0f099798a09c7eba9f3a8961cd091")]
 [assembly: System.Reflection.AssemblyProductAttribute("TSqlColumnLineage.Core")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TSqlColumnLineage.Core")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
