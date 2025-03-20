@@ -1,0 +1,5 @@
+/home/askg/Desktop/TSqlColumnLineage/TSqlColumnLineage.Core/obj/Debug/net9.0/TSqlColumnLineage.Core.csproj.AssemblyReference.cache
+/home/askg/Desktop/TSqlColumnLineage/TSqlColumnLineage.Core/obj/Debug/net9.0/TSqlColumnLineage.Core.GeneratedMSBuildEditorConfig.editorconfig
+/home/askg/Desktop/TSqlColumnLineage/TSqlColumnLineage.Core/obj/Debug/net9.0/TSqlColumnLineage.Core.AssemblyInfoInputs.cache
+/home/askg/Desktop/TSqlColumnLineage/TSqlColumnLineage.Core/obj/Debug/net9.0/TSqlColumnLineage.Core.AssemblyInfo.cs
+/home/askg/Desktop/TSqlColumnLineage/TSqlColumnLineage.Core/obj/Debug/net9.0/TSqlColumnLineage.Core.csproj.CoreCompileInputs.cache
