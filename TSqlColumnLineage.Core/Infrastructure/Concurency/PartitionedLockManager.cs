@@ -54,8 +54,8 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             // Acquire lock
             Interlocked.Increment(ref _totalReadLocks);
             partition.Lock.EnterReadLock();
-
-            return new LockScope(partition.Lock, isWriter: false);
+            
+            return new LockScope(partition, isWriter: false);
         }
 
         /// <summary>
@@ -70,8 +70,8 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             // Acquire lock
             Interlocked.Increment(ref _totalReadLocks);
             partition.Lock.EnterReadLock();
-
-            return new LockScope(partition.Lock, isWriter: false);
+            
+            return new LockScope(partition, isWriter: false);
         }
 
         /// <summary>
@@ -95,8 +95,9 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             // Acquire lock
             Interlocked.Increment(ref _totalWriteLocks);
             partition.Lock.EnterWriteLock();
-
-            return new LockScope(partition.Lock, isWriter: true);
+            Interlocked.Increment(ref partition.WriteLockHeld);
+            
+            return new LockScope(partition, isWriter: true);
         }
 
         /// <summary>
@@ -117,8 +118,9 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             // Acquire lock
             Interlocked.Increment(ref _totalWriteLocks);
             partition.Lock.EnterWriteLock();
-
-            return new LockScope(partition.Lock, isWriter: true);
+            Interlocked.Increment(ref partition.WriteLockHeld);
+            
+            return new LockScope(partition, isWriter: true);
         }
 
         /// <summary>
@@ -137,7 +139,7 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             if (partition.Lock.TryEnterReadLock(timeoutMs))
             {
                 Interlocked.Increment(ref _totalReadLocks);
-                return new LockScope(partition.Lock, isWriter: false);
+                return new LockScope(partition, isWriter: false);
             }
 
             Interlocked.Increment(ref _totalContentions);
@@ -160,7 +162,8 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             if (partition.Lock.TryEnterWriteLock(timeoutMs))
             {
                 Interlocked.Increment(ref _totalWriteLocks);
-                return new LockScope(partition.Lock, isWriter: true);
+                Interlocked.Increment(ref partition.WriteLockHeld);
+                return new LockScope(partition, isWriter: true);
             }
 
             Interlocked.Increment(ref _totalContentions);
@@ -179,9 +182,12 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
 
             for (int i = 0; i < _partitionCount; i++)
             {
-                var lock_ = _partitions[i].Lock;
+                var partition = _partitions[i];
+                var lock_ = partition.Lock;
+                
                 activeReaders += lock_.CurrentReadCount;
-                if (lock_.IsWriteLockHeld) activeWriters++;
+                if (partition.WriteLockHeld > 0) activeWriters++;
+                
                 waitingReaders += lock_.WaitingReadCount;
                 waitingWriters += lock_.WaitingWriteCount;
             }
@@ -237,25 +243,31 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
         /// </summary>
         private class LockPartition
         {
-            public ReaderWriterLockSlim Lock { get; } = new ReaderWriterLockSlim();
+            public ReaderWriterLockSlim Lock { get; } = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
+            public int WriteLockHeld;
         }
 
         /// <summary>
         /// Scope for automatic lock release
         /// </summary>
-        private class LockScope(ReaderWriterLockSlim lock_, bool isWriter) : IDisposable
+        private class LockScope(PartitionedLockManager.LockPartition partition, bool isWriter) : IDisposable
         {
             private bool _disposed;
 
             public void Dispose()
             {
                 if (_disposed) return;
-
+                
                 if (isWriter)
-                    lock_.ExitWriteLock();
+                {
+                    Interlocked.Decrement(ref partition.WriteLockHeld);
+                    partition.Lock.ExitWriteLock();
+                }
                 else
-                    lock_.ExitReadLock();
-
+                {
+                    partition.Lock.ExitReadLock();
+                }
+                
                 _disposed = true;
             }
         }
@@ -266,9 +278,7 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
         private class NullLockScope : IDisposable
         {
             public static readonly NullLockScope Instance = new();
-
             private NullLockScope() { }
-
             public void Dispose() { }
         }
     }

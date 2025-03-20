@@ -15,7 +15,7 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
     public sealed class BatchOperationManager
     {
         // Singleton instance
-        private static readonly Lazy<BatchOperationManager> _instance =
+        private static readonly Lazy<BatchOperationManager> _instance = 
             new(() => new BatchOperationManager());
 
         // Concurrency settings
@@ -29,7 +29,7 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
         private long _totalBatchesProcessed;
         private long _totalOperationsProcessed;
         private long _totalErrors;
-        private readonly ConcurrentDictionary<string, long> _operationTypeStats =
+        private readonly ConcurrentDictionary<string, long> _operationTypeStats = 
             new();
 
         // Memory optimization
@@ -64,7 +64,6 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
         private BatchOperationManager()
         {
             _batchLimiter = new SemaphoreSlim(_maxConcurrentBatches, _maxConcurrentBatches);
-
             // Register for memory pressure events
             MemoryPressureMonitor.Instance.MemoryPressureChanged += OnMemoryPressureChanged;
         }
@@ -75,13 +74,11 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
         private void OnMemoryPressureChanged(object? sender, MemoryPressureEventArgs e)
         {
             _lastPressureLevel = e.NewLevel;
-
             // Adjust concurrency based on memory pressure
             if (e.NewLevel == MemoryPressureLevel.High && _maxConcurrentBatches > 2)
             {
                 int newMax = Math.Max(2, _maxConcurrentBatches / 2);
                 Interlocked.Exchange(ref _maxConcurrentBatches, newMax);
-
                 // Update semaphore
                 int current = _batchLimiter.CurrentCount;
                 if (current > newMax)
@@ -96,7 +93,6 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             {
                 int newMax = Math.Min(Environment.ProcessorCount, _maxConcurrentBatches * 2);
                 Interlocked.Exchange(ref _maxConcurrentBatches, newMax);
-
                 // Update semaphore
                 int current = _batchLimiter.CurrentCount;
                 if (current < newMax)
@@ -123,7 +119,6 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
                 return BatchResult<TItem, TResult>.Empty;
 
             ArgumentNullException.ThrowIfNull(operation);
-
             operationType ??= typeof(TItem).Name;
 
             // Determine optimal batch size based on memory pressure
@@ -141,7 +136,6 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             Interlocked.Increment(ref _totalBatchesProcessed);
             Interlocked.Add(ref _totalOperationsProcessed, result.SuccessCount + result.ErrorCount);
             Interlocked.Add(ref _totalErrors, result.ErrorCount);
-
             _operationTypeStats.AddOrUpdate(
                 operationType,
                 result.SuccessCount,
@@ -164,7 +158,6 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
                 return BatchResult<TItem, TResult>.Empty;
 
             ArgumentNullException.ThrowIfNull(operation);
-
             operationType ??= typeof(TItem).Name;
 
             // Determine optimal batch size based on memory pressure
@@ -177,29 +170,48 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             for (int batchStart = 0; batchStart < items.Count; batchStart += batchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-
                 int currentBatchSize = Math.Min(batchSize, items.Count - batchStart);
 
                 // Acquire semaphore
                 _batchLimiter.Wait(cancellationToken);
-
                 try
                 {
                     // Process this batch
                     var results = new TResult[currentBatchSize];
-
-                    Parallel.For(0, currentBatchSize, i =>
+                    
+                    // Use ParallelOptions to propagate cancellation
+                    var parallelOptions = new ParallelOptions
                     {
-                        try
+                        CancellationToken = cancellationToken
+                    };
+                    
+                    try
+                    {
+                        Parallel.For(0, currentBatchSize, parallelOptions, i =>
                         {
-                            int itemIndex = batchStart + i;
-                            results[i] = operation(items[itemIndex]);
-                        }
-                        catch (Exception ex)
-                        {
-                            errors[batchStart + i] = ex;
-                        }
-                    });
+                            try
+                            {
+                                // Check cancellation here
+                                cancellationToken.ThrowIfCancellationRequested();
+                                
+                                int itemIndex = batchStart + i;
+                                results[i] = operation(items[itemIndex]);
+                            }
+                            catch (Exception ex)
+                            {
+                                errors[batchStart + i] = ex;
+                                
+                                // Rethrow cancellation exceptions to stop processing
+                                if (ex is OperationCanceledException)
+                                    throw;
+                            }
+                        });
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Propagate cancellation up
+                        throw;
+                    }
 
                     // Add results
                     for (int i = 0; i < currentBatchSize; i++)
@@ -228,7 +240,6 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
             Interlocked.Increment(ref _totalBatchesProcessed);
             Interlocked.Add(ref _totalOperationsProcessed, result.SuccessCount + result.ErrorCount);
             Interlocked.Add(ref _totalErrors, result.ErrorCount);
-
             _operationTypeStats.AddOrUpdate(
                 operationType,
                 result.SuccessCount,
@@ -273,101 +284,103 @@ namespace TSqlColumnLineage.Core.Infrastructure.Concurency
                 _ => _defaultBatchSize
             };
         }
-    }
-
-    /// <summary>
-    /// Helper class to process batches of items asynchronously
-    /// </summary>
-    /// <remarks>
-    /// Creates a new batch processor
-    /// </remarks>
-    internal class BatchProcessor<TItem, TResult>(
-        IReadOnlyList<TItem> items,
-        Func<TItem, CancellationToken, Task<TResult>> operation,
-        int batchSize,
-        string operationType)
-    {
 
         /// <summary>
-        /// Processes all items in batches
+        /// Helper class to process batches of items asynchronously
         /// </summary>
-        public async Task<BatchResult<TItem, TResult>> ProcessAsync(
-            SemaphoreSlim semaphore,
-            CancellationToken cancellationToken)
+        /// <remarks>
+        /// Creates a new batch processor
+        /// </remarks>
+        internal class BatchProcessor<TItem, TResult>(
+            IReadOnlyList<TItem> items,
+            Func<TItem, CancellationToken, Task<TResult>> operation,
+            int batchSize,
+            string operationType)
         {
-            var allResults = new List<TResult>(items.Count);
-            var errors = new ConcurrentDictionary<int, Exception>();
 
-            // Process in batches
-            for (int batchStart = 0; batchStart < items.Count; batchStart += batchSize)
+            /// <summary>
+            /// Processes all items in batches
+            /// </summary>
+            public async Task<BatchResult<TItem, TResult>> ProcessAsync(
+                SemaphoreSlim semaphore,
+                CancellationToken cancellationToken)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                var allResults = new List<TResult>(items.Count);
+                var errors = new ConcurrentDictionary<int, Exception>();
 
-                int currentBatchSize = Math.Min(batchSize, items.Count - batchStart);
+                // Process in batches
+                for (int batchStart = 0; batchStart < items.Count; batchStart += batchSize)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int currentBatchSize = Math.Min(batchSize, items.Count - batchStart);
 
-                // Acquire semaphore
-                await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    // Acquire semaphore
+                    await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        // Process this batch
+                        var batchTasks = new Task<(int Index, TResult Result, Exception Error)>[currentBatchSize];
+                        for (int i = 0; i < currentBatchSize; i++)
+                        {
+                            int itemIndex = batchStart + i;
+                            batchTasks[i] = ProcessItemAsync(itemIndex, cancellationToken);
+                        }
 
+                        // Wait for all tasks to complete
+                        await Task.WhenAll(batchTasks).ConfigureAwait(false);
+
+                        // Collect results
+                        foreach (var task in batchTasks)
+                        {
+                            var (index, result, error) = task.Result;
+                            if (error != null)
+                            {
+                                errors[index] = error;
+                                
+                                // Propagate cancellation exceptions
+                                if (error is OperationCanceledException)
+                                    throw error;
+                            }
+                            else
+                            {
+                                allResults.Add(result);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                }
+
+                return new BatchResult<TItem, TResult>
+                {
+                    SuccessCount = allResults.Count,
+                    ErrorCount = errors.Count,
+                    Results = allResults,
+                    Errors = errors
+                };
+            }
+
+            /// <summary>
+            /// Processes a single item
+            /// </summary>
+            private async Task<(int Index, TResult? Result, Exception? Error)> ProcessItemAsync(
+                int index, CancellationToken cancellationToken)
+            {
                 try
                 {
-                    // Process this batch
-                    var batchTasks = new Task<(int Index, TResult Result, Exception Error)>[currentBatchSize];
-
-                    for (int i = 0; i < currentBatchSize; i++)
-                    {
-                        int itemIndex = batchStart + i;
-                        batchTasks[i] = ProcessItemAsync(itemIndex, cancellationToken);
-                    }
-
-                    // Wait for all tasks to complete
-                    await Task.WhenAll(batchTasks).ConfigureAwait(false);
-
-                    // Collect results
-                    foreach (var task in batchTasks)
-                    {
-                        var (index, result, error) = task.Result;
-
-                        if (error != null)
-                        {
-                            errors[index] = error;
-                        }
-                        else
-                        {
-                            allResults.Add(result);
-                        }
-                    }
+                    // Check for cancellation before processing
+                    cancellationToken.ThrowIfCancellationRequested();
+                    
+                    var result = await operation(items[index], cancellationToken)
+                        .ConfigureAwait(false);
+                    return (index, result, null);
                 }
-                finally
+                catch (Exception ex)
                 {
-                    semaphore.Release();
+                    return (index, default, ex);
                 }
-            }
-
-            return new BatchResult<TItem, TResult>
-            {
-                SuccessCount = allResults.Count,
-                ErrorCount = errors.Count,
-                Results = allResults,
-                Errors = errors
-            };
-        }
-
-        /// <summary>
-        /// Processes a single item
-        /// </summary>
-        private async Task<(int Index, TResult? Result, Exception? Error)> ProcessItemAsync(
-            int index, CancellationToken cancellationToken)
-        {
-            try
-            {
-                var result = await operation(items[index], cancellationToken)
-                    .ConfigureAwait(false);
-
-                return (index, result, null);
-            }
-            catch (Exception ex)
-            {
-                return (index, default, ex);
             }
         }
     }
