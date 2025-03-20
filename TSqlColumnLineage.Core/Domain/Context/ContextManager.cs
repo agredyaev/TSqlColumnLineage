@@ -596,9 +596,9 @@ namespace TSqlColumnLineage.Domain.Context
     /// </summary>
     public class VariableInfo
     {
-        public string Name { get; set; }
-        public string DataType { get; set; }
-        public object Value { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string DataType { get; set; } = string.Empty;
+        public object Value { get; set; } = string.Empty;
         public bool IsParameter { get; set; }
         
         public override string ToString()

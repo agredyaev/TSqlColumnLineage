@@ -18,7 +18,7 @@ namespace TSqlColumnLineage.Domain.Graph
         private readonly Dictionary<string, object> _metadata = new Dictionary<string, object>();
         
         // Source SQL script
-        public string SourceSql { get; set; }
+        public string SourceSql { get; set; } = string.Empty;
         
         // Creation timestamp
         public DateTime CreatedAt { get; } = DateTime.UtcNow;
@@ -296,7 +296,7 @@ namespace TSqlColumnLineage.Domain.Graph
     {
         public int SourceId { get; set; }
         public int TargetId { get; set; }
-        public List<EdgeData> Edges { get; set; }
+        public List<EdgeData> Edges { get; set; } = new List<EdgeData>();
         
         public override string ToString()
         {

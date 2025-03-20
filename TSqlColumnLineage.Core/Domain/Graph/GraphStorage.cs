@@ -14,49 +14,49 @@ namespace TSqlColumnLineage.Domain.Graph
         // Node storage arrays
         private int _nodeCapacity;
         private int _nodeCount;
-        private int[] _nodeIds;
-        private NodeType[] _nodeTypes;
-        private string[] _nodeNames;
-        private string[] _nodeObjectNames;
-        private string[] _nodeSchemaNames;
-        private string[] _nodeDatabaseNames;
-        private Dictionary<string, object>[] _nodeMetadata;
+        private int[] _nodeIds = Array.Empty<int>();
+        private NodeType[] _nodeTypes = Array.Empty<NodeType>();
+        private string[] _nodeNames = Array.Empty<string>();
+        private string[] _nodeObjectNames = Array.Empty<string>();
+        private string[] _nodeSchemaNames = Array.Empty<string>();
+        private string[] _nodeDatabaseNames = Array.Empty<string>();
+        private Dictionary<string, object>[] _nodeMetadata = Array.Empty<Dictionary<string, object>>();
         
         // Column-specific arrays
-        private string[] _columnDataTypes;
-        private string[] _columnTableOwners;
-        private bool[] _columnIsNullable;
-        private bool[] _columnIsComputed;
+        private string[] _columnDataTypes = Array.Empty<string>();
+        private string[] _columnTableOwners = Array.Empty<string>();
+        private bool[] _columnIsNullable = Array.Empty<bool>();
+        private bool[] _columnIsComputed = Array.Empty<bool>();
         
         // Table-specific arrays
-        private string[] _tableTableTypes;
-        private string[] _tableAliases;
-        private string[] _tableDefinitions;
-        private int[][] _tableColumns;
+        private string[] _tableTableTypes = Array.Empty<string>();
+        private string[] _tableAliases = Array.Empty<string>();
+        private string[] _tableDefinitions = Array.Empty<string>();
+        private int[][] _tableColumns = Array.Empty<int[]>();
         
         // Expression-specific arrays
-        private string[] _expressionExpressionTypes;
-        private string[] _expressionExpressions;
-        private string[] _expressionResultTypes;
-        private string[] _expressionTableOwners;
+        private string[] _expressionExpressionTypes = Array.Empty<string>();
+        private string[] _expressionExpressions = Array.Empty<string>();
+        private string[] _expressionResultTypes = Array.Empty<string>();
+        private string[] _expressionTableOwners = Array.Empty<string>();
         
         // Edge storage arrays
         private int _edgeCapacity;
         private int _edgeCount;
-        private int[] _edgeIds;
-        private int[] _edgeSourceIds;
-        private int[] _edgeTargetIds;
-        private EdgeType[] _edgeTypes;
-        private string[] _edgeOperations;
-        private string[] _edgeSqlExpressions;
+        private int[] _edgeIds = Array.Empty<int>();
+        private int[] _edgeSourceIds = Array.Empty<int>();
+        private int[] _edgeTargetIds = Array.Empty<int>();
+        private EdgeType[] _edgeTypes = Array.Empty<EdgeType>();
+        private string[] _edgeOperations = Array.Empty<string>();
+        private string[] _edgeSqlExpressions = Array.Empty<string>();
         
         // Lookup dictionaries for fast access
-        private Dictionary<string, int> _nodeNameToId;
-        private Dictionary<(string TableName, string ColumnName), int> _columnLookup;
+        private Dictionary<string, int> _nodeNameToId = new();
+        private Dictionary<(string TableName, string ColumnName), int> _columnLookup = new();
         
         // Adjacency lists for fast traversal
-        private List<int>[] _outgoingEdges;
-        private List<int>[] _incomingEdges;
+        private List<int>[] _outgoingEdges = Array.Empty<List<int>>();
+        private List<int>[] _incomingEdges = Array.Empty<List<int>>();
         
         // String pool for memory optimization
         private readonly StringPool _stringPool;
@@ -221,7 +221,7 @@ namespace TSqlColumnLineage.Domain.Graph
         /// <summary>
         /// Adds a column node to the graph
         /// </summary>
-        public int AddColumnNode(string name, string tableName, string dataType, bool isNullable = false, bool isComputed = false, string objectName = null, string schemaName = "", string databaseName = "")
+        public int AddColumnNode(string name, string tableName, string dataType, bool isNullable = false, bool isComputed = false, string objectName = "", string schemaName = "", string databaseName = "")
         {
             name = _stringPool.Intern(name);
             tableName = _stringPool.Intern(tableName);
@@ -274,7 +274,7 @@ namespace TSqlColumnLineage.Domain.Graph
         /// <summary>
         /// Adds a table node to the graph
         /// </summary>
-        public int AddTableNode(string name, string tableType, string alias = "", string definition = "", string objectName = null, string schemaName = "", string databaseName = "")
+        public int AddTableNode(string name, string tableType, string alias = "", string definition = "", string objectName = "", string schemaName = "", string databaseName = "")
         {
             name = _stringPool.Intern(name);
             tableType = _stringPool.Intern(tableType);
@@ -327,7 +327,7 @@ namespace TSqlColumnLineage.Domain.Graph
         /// <summary>
         /// Adds an expression node to the graph
         /// </summary>
-        public int AddExpressionNode(string name, string expressionText, string expressionType, string resultType = "", string tableOwner = "", string objectName = null, string schemaName = "", string databaseName = "")
+        public int AddExpressionNode(string name, string expressionText, string expressionType, string resultType = "", string tableOwner = "", string objectName = "", string schemaName = "", string databaseName = "")
         {
             name = _stringPool.Intern(name);
             // Don't intern the expression text as it can be large and unique
@@ -431,11 +431,11 @@ namespace TSqlColumnLineage.Domain.Graph
             try
             {
                 // Check if edge already exists
-                foreach (var edgeId in _outgoingEdges[sourceId])
+                foreach (var existingEdgeId in _outgoingEdges[sourceId])
                 {
-                    if (_edgeTargetIds[edgeId] == targetId && _edgeTypes[edgeId] == type)
+                    if (_edgeTargetIds[existingEdgeId] == targetId && _edgeTypes[existingEdgeId] == type)
                     {
-                        return edgeId;
+                        return existingEdgeId;
                     }
                 }
                 
@@ -918,7 +918,7 @@ namespace TSqlColumnLineage.Domain.Graph
         private class PathState
         {
             public int NodeId { get; set; }
-            public List<int> Path { get; set; }
+            public List<int> Path { get; set; } = new List<int>();
         }
     }
     
@@ -952,15 +952,15 @@ namespace TSqlColumnLineage.Domain.Graph
     {
         public int Id { get; set; }
         public NodeType Type { get; set; }
-        public string Name { get; set; }
-        public string ObjectName { get; set; }
-        public string SchemaName { get; set; }
-        public string DatabaseName { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string ObjectName { get; set; } = string.Empty;
+        public string SchemaName { get; set; } = string.Empty;
+        public string DatabaseName { get; set; } = string.Empty;
         public Dictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
         
-        public ColumnData ColumnData { get; set; }
-        public TableData TableData { get; set; }
-        public ExpressionData ExpressionData { get; set; }
+        public ColumnData? ColumnData { get; set; }
+        public TableData? TableData { get; set; }
+        public ExpressionData? ExpressionData { get; set; }
     }
     
     /// <summary>
@@ -968,8 +968,8 @@ namespace TSqlColumnLineage.Domain.Graph
     /// </summary>
     public class ColumnData
     {
-        public string DataType { get; set; }
-        public string TableOwner { get; set; }
+        public string DataType { get; set; } = string.Empty;
+        public string TableOwner { get; set; } = string.Empty;
         public bool IsNullable { get; set; }
         public bool IsComputed { get; set; }
     }
@@ -979,10 +979,10 @@ namespace TSqlColumnLineage.Domain.Graph
     /// </summary>
     public class TableData
     {
-        public string TableType { get; set; }
-        public string Alias { get; set; }
-        public string Definition { get; set; }
-        public int[] ColumnIds { get; set; }
+        public string TableType { get; set; } = string.Empty;
+        public string Alias { get; set; } = string.Empty;
+        public string Definition { get; set; } = string.Empty;
+        public int[] ColumnIds { get; set; } = Array.Empty<int>();
     }
     
     /// <summary>
@@ -990,10 +990,10 @@ namespace TSqlColumnLineage.Domain.Graph
     /// </summary>
     public class ExpressionData
     {
-        public string ExpressionType { get; set; }
-        public string Expression { get; set; }
-        public string ResultType { get; set; }
-        public string TableOwner { get; set; }
+        public string ExpressionType { get; set; } = string.Empty;
+        public string Expression { get; set; } = string.Empty;
+        public string ResultType { get; set; } = string.Empty;
+        public string TableOwner { get; set; } = string.Empty;
     }
     
     /// <summary>
@@ -1005,7 +1005,7 @@ namespace TSqlColumnLineage.Domain.Graph
         public int SourceId { get; set; }
         public int TargetId { get; set; }
         public EdgeType Type { get; set; }
-        public string Operation { get; set; }
-        public string SqlExpression { get; set; }
+        public string Operation { get; set; } = string.Empty;
+        public string SqlExpression { get; set; } = string.Empty;
     }
 }

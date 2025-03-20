@@ -276,9 +276,9 @@ namespace TSqlColumnLineage.Domain.Context
     /// </summary>
     public class TableMetadata
     {
-        public string Name { get; set; }
-        public string Schema { get; set; }
-        public string Database { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Schema { get; set; } = string.Empty;
+        public string Database { get; set; } = string.Empty;
         public bool IsTemporary => Name?.StartsWith("#") ?? false;
         
         public override string ToString()
@@ -297,9 +297,9 @@ namespace TSqlColumnLineage.Domain.Context
     /// </summary>
     public class ColumnMetadata
     {
-        public string TableName { get; set; }
-        public string Name { get; set; }
-        public string DataType { get; set; }
+        public string TableName { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string DataType { get; set; } = string.Empty;
         public bool IsNullable { get; set; }
         public bool IsPrimaryKey { get; set; }
         
