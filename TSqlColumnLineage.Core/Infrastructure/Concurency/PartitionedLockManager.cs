@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-namespace TSqlColumnLineage.Infrastructure.Concurrency
+namespace TSqlColumnLineage.Core.Infrastructure.Concurency
 {
     /// <summary>
     /// Provides partitioned locking for high-concurrency scenarios
@@ -15,12 +15,12 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
         private readonly LockPartition[] _partitions;
         private readonly int _partitionCount;
         private readonly int _partitionMask;
-        
+
         // Statistics
         private long _totalReadLocks;
         private long _totalWriteLocks;
         private long _totalContentions;
-        
+
         /// <summary>
         /// Creates a new partitioned lock manager
         /// </summary>
@@ -30,7 +30,7 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
             partitionCount = NextPowerOfTwo(partitionCount);
             _partitionCount = partitionCount;
             _partitionMask = partitionCount - 1;
-            
+
             // Initialize partitions
             _partitions = new LockPartition[partitionCount];
             for (int i = 0; i < partitionCount; i++)
@@ -38,7 +38,7 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
                 _partitions[i] = new LockPartition();
             }
         }
-        
+
         /// <summary>
         /// Acquires a read lock for the specified key
         /// </summary>
@@ -46,18 +46,18 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
         {
             if (string.IsNullOrEmpty(key))
                 return NullLockScope.Instance;
-                
+
             // Get partition
             int partitionIndex = GetPartitionIndex(key);
             var partition = _partitions[partitionIndex];
-            
+
             // Acquire lock
             Interlocked.Increment(ref _totalReadLocks);
             partition.Lock.EnterReadLock();
-            
+
             return new LockScope(partition.Lock, isWriter: false);
         }
-        
+
         /// <summary>
         /// Acquires a read lock for the specified key
         /// </summary>
@@ -66,14 +66,14 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
             // Get partition
             int partitionIndex = GetPartitionIndex(key);
             var partition = _partitions[partitionIndex];
-            
+
             // Acquire lock
             Interlocked.Increment(ref _totalReadLocks);
             partition.Lock.EnterReadLock();
-            
+
             return new LockScope(partition.Lock, isWriter: false);
         }
-        
+
         /// <summary>
         /// Acquires a write lock for the specified key
         /// </summary>
@@ -81,24 +81,24 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
         {
             if (string.IsNullOrEmpty(key))
                 return NullLockScope.Instance;
-                
+
             // Get partition
             int partitionIndex = GetPartitionIndex(key);
             var partition = _partitions[partitionIndex];
-            
+
             // Check contention
             if (partition.Lock.WaitingWriteCount > 0 || partition.Lock.WaitingReadCount > 0)
             {
                 Interlocked.Increment(ref _totalContentions);
             }
-            
+
             // Acquire lock
             Interlocked.Increment(ref _totalWriteLocks);
             partition.Lock.EnterWriteLock();
-            
+
             return new LockScope(partition.Lock, isWriter: true);
         }
-        
+
         /// <summary>
         /// Acquires a write lock for the specified key
         /// </summary>
@@ -107,20 +107,20 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
             // Get partition
             int partitionIndex = GetPartitionIndex(key);
             var partition = _partitions[partitionIndex];
-            
+
             // Check contention
             if (partition.Lock.WaitingWriteCount > 0 || partition.Lock.WaitingReadCount > 0)
             {
                 Interlocked.Increment(ref _totalContentions);
             }
-            
+
             // Acquire lock
             Interlocked.Increment(ref _totalWriteLocks);
             partition.Lock.EnterWriteLock();
-            
+
             return new LockScope(partition.Lock, isWriter: true);
         }
-        
+
         /// <summary>
         /// Tries to acquire a read lock with timeout
         /// </summary>
@@ -128,22 +128,22 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
         {
             if (string.IsNullOrEmpty(key))
                 return NullLockScope.Instance;
-                
+
             // Get partition
             int partitionIndex = GetPartitionIndex(key);
             var partition = _partitions[partitionIndex];
-            
+
             // Try to acquire lock
             if (partition.Lock.TryEnterReadLock(timeoutMs))
             {
                 Interlocked.Increment(ref _totalReadLocks);
                 return new LockScope(partition.Lock, isWriter: false);
             }
-            
+
             Interlocked.Increment(ref _totalContentions);
             return NullLockScope.Instance;
         }
-        
+
         /// <summary>
         /// Tries to acquire a write lock with timeout
         /// </summary>
@@ -151,22 +151,22 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
         {
             if (string.IsNullOrEmpty(key))
                 return NullLockScope.Instance;
-                
+
             // Get partition
             int partitionIndex = GetPartitionIndex(key);
             var partition = _partitions[partitionIndex];
-            
+
             // Try to acquire lock
             if (partition.Lock.TryEnterWriteLock(timeoutMs))
             {
                 Interlocked.Increment(ref _totalWriteLocks);
                 return new LockScope(partition.Lock, isWriter: true);
             }
-            
+
             Interlocked.Increment(ref _totalContentions);
             return NullLockScope.Instance;
         }
-        
+
         /// <summary>
         /// Gets lock statistics
         /// </summary>
@@ -176,7 +176,7 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
             int activeWriters = 0;
             int waitingReaders = 0;
             int waitingWriters = 0;
-            
+
             for (int i = 0; i < _partitionCount; i++)
             {
                 var lock_ = _partitions[i].Lock;
@@ -185,7 +185,7 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
                 waitingReaders += lock_.WaitingReadCount;
                 waitingWriters += lock_.WaitingWriteCount;
             }
-            
+
             return new LockStatistics
             {
                 PartitionCount = _partitionCount,
@@ -198,25 +198,25 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
                 WaitingWriters = waitingWriters
             };
         }
-        
+
         /// <summary>
         /// Gets partition index for a string key
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private int GetPartitionIndex(string key)
         {
-            return (key.GetHashCode() & int.MaxValue) & _partitionMask;
+            return key.GetHashCode() & int.MaxValue & _partitionMask;
         }
-        
+
         /// <summary>
         /// Gets partition index for an integer key
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private int GetPartitionIndex(int key)
         {
-            return (key & int.MaxValue) & _partitionMask;
+            return key & int.MaxValue & _partitionMask;
         }
-        
+
         /// <summary>
         /// Gets the next power of two
         /// </summary>
@@ -231,7 +231,7 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
             x++;
             return x;
         }
-        
+
         /// <summary>
         /// Represents a lock partition
         /// </summary>
@@ -239,48 +239,40 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
         {
             public ReaderWriterLockSlim Lock { get; } = new ReaderWriterLockSlim();
         }
-        
+
         /// <summary>
         /// Scope for automatic lock release
         /// </summary>
-        private class LockScope : IDisposable
+        private class LockScope(ReaderWriterLockSlim lock_, bool isWriter) : IDisposable
         {
-            private readonly ReaderWriterLockSlim _lock;
-            private readonly bool _isWriter;
             private bool _disposed;
-            
-            public LockScope(ReaderWriterLockSlim lock_, bool isWriter)
-            {
-                _lock = lock_;
-                _isWriter = isWriter;
-            }
-            
+
             public void Dispose()
             {
                 if (_disposed) return;
-                
-                if (_isWriter)
-                    _lock.ExitWriteLock();
+
+                if (isWriter)
+                    lock_.ExitWriteLock();
                 else
-                    _lock.ExitReadLock();
-                    
+                    lock_.ExitReadLock();
+
                 _disposed = true;
             }
         }
-        
+
         /// <summary>
         /// Null lock scope that does nothing
         /// </summary>
         private class NullLockScope : IDisposable
         {
-            public static readonly NullLockScope Instance = new NullLockScope();
-            
+            public static readonly NullLockScope Instance = new();
+
             private NullLockScope() { }
-            
+
             public void Dispose() { }
         }
     }
-    
+
     /// <summary>
     /// Lock statistics
     /// </summary>
@@ -294,7 +286,7 @@ namespace TSqlColumnLineage.Infrastructure.Concurrency
         public int ActiveWriters { get; set; }
         public int WaitingReaders { get; set; }
         public int WaitingWriters { get; set; }
-        
+
         public override string ToString()
         {
             return $"Partitions: {PartitionCount}, " +

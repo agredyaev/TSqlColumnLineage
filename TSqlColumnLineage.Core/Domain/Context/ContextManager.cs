@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Threading;
-using TSqlColumnLineage.Domain.Graph;
+using TSqlColumnLineage.Core.Domain.Graph;
 
-namespace TSqlColumnLineage.Domain.Context
+namespace TSqlColumnLineage.Core.Domain.Context
 {
     /// <summary>
     /// Manages execution context for SQL queries during lineage analysis.
@@ -13,85 +13,85 @@ namespace TSqlColumnLineage.Domain.Context
     public sealed class ContextManager
     {
         // String pool for memory optimization
-        private readonly StringPool _stringPool = new StringPool();
-        
+        private readonly StringPool _stringPool = new();
+
         // Scopes stack for each processing thread
-        private readonly ThreadLocal<Stack<ScopeFrame>> _scopeStacks = 
-            new ThreadLocal<Stack<ScopeFrame>>(() => new Stack<ScopeFrame>());
-        
+        private readonly ThreadLocal<Stack<ScopeFrame>> _scopeStacks =
+            new(() => new Stack<ScopeFrame>());
+
         // Global variable declarations (thread-safe)
-        private readonly ConcurrentDictionary<string, VariableInfo> _globalVariables = 
-            new ConcurrentDictionary<string, VariableInfo>(StringComparer.OrdinalIgnoreCase);
-            
+        private readonly ConcurrentDictionary<string, VariableInfo> _globalVariables =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Table aliases (thread-safe)
-        private readonly ConcurrentDictionary<string, string> _tableAliases = 
-            new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            
+        private readonly ConcurrentDictionary<string, string> _tableAliases =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Known tables and columns (thread-safe)
-        private readonly ConcurrentDictionary<string, int> _tables = 
-            new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            
+        private readonly ConcurrentDictionary<string, int> _tables =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Temporary tables (thread-safe)
-        private readonly ConcurrentDictionary<string, int> _tempTables = 
-            new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            
+        private readonly ConcurrentDictionary<string, int> _tempTables =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Common table expressions (thread-safe)
-        private readonly ConcurrentDictionary<string, int> _cteDefinitions = 
-            new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            
+        private readonly ConcurrentDictionary<string, int> _cteDefinitions =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Table variable declarations (thread-safe)
-        private readonly ConcurrentDictionary<string, int> _tableVariables = 
-            new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            
+        private readonly ConcurrentDictionary<string, int> _tableVariables =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Procedures and functions (thread-safe)
-        private readonly ConcurrentDictionary<string, int> _procedures = 
-            new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            
+        private readonly ConcurrentDictionary<string, int> _procedures =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Global flags and state
-        private readonly ConcurrentDictionary<string, object> _state = 
-            new ConcurrentDictionary<string, object>();
-            
+        private readonly ConcurrentDictionary<string, object> _state =
+            new();
+
         // CancellationToken source for stopping processing
-        private readonly CancellationTokenSource _cancellationSource = new CancellationTokenSource();
-            
+        private readonly CancellationTokenSource _cancellationSource = new();
+
         // The lineage graph being built
         private readonly LineageGraph _graph;
-        
+
         /// <summary>
         /// Gets whether processing should be stopped
         /// </summary>
         public bool ShouldStop => _cancellationSource.IsCancellationRequested;
-        
+
         /// <summary>
         /// Gets the cancellation token
         /// </summary>
         public CancellationToken CancellationToken => _cancellationSource.Token;
-        
+
         /// <summary>
         /// Gets the lineage graph
         /// </summary>
         public LineageGraph Graph => _graph;
-        
+
         /// <summary>
         /// Creates a new context manager
         /// </summary>
         public ContextManager(LineageGraph graph)
         {
             _graph = graph ?? throw new ArgumentNullException(nameof(graph));
-            
+
             // Push the global scope
             EnsureScopeStack().Push(new ScopeFrame(ScopeType.Global));
         }
-        
+
         /// <summary>
         /// Pushes a new scope onto the stack
         /// </summary>
-        public void PushScope(ScopeType scopeType, string name = null)
+        public void PushScope(ScopeType scopeType, string name = "")
         {
             name = _stringPool.Intern(name);
             EnsureScopeStack().Push(new ScopeFrame(scopeType, name));
         }
-        
+
         /// <summary>
         /// Pops the current scope from the stack
         /// </summary>
@@ -103,19 +103,19 @@ namespace TSqlColumnLineage.Domain.Context
                 // Don't pop the global scope
                 return;
             }
-            
+
             stack.Pop();
         }
-        
+
         /// <summary>
         /// Creates a scope that will be automatically popped when disposed
         /// </summary>
-        public IDisposable CreateScope(ScopeType scopeType, string name = null)
+        public IDisposable CreateScope(ScopeType scopeType, string name = "")
         {
             PushScope(scopeType, name);
             return new ScopeDisposer(this);
         }
-        
+
         /// <summary>
         /// Declares a variable in the current scope
         /// </summary>
@@ -123,12 +123,12 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(name))
                 throw new ArgumentException("Variable name cannot be null or empty", nameof(name));
-                
+
             name = _stringPool.Intern(name);
             dataType = _stringPool.Intern(dataType);
-            
+
             var scope = GetCurrentScope();
-            
+
             if (scope.ScopeType == ScopeType.Global)
             {
                 // Global variable
@@ -152,7 +152,7 @@ namespace TSqlColumnLineage.Domain.Context
                 };
             }
         }
-        
+
         /// <summary>
         /// Sets a variable value in the current scope chain
         /// </summary>
@@ -160,9 +160,9 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(name))
                 throw new ArgumentException("Variable name cannot be null or empty", nameof(name));
-                
+
             name = _stringPool.Intern(name);
-            
+
             // Try to find variable in current scope chain
             var stack = EnsureScopeStack();
             for (int i = stack.Count - 1; i >= 0; i--)
@@ -180,7 +180,7 @@ namespace TSqlColumnLineage.Domain.Context
                     return;
                 }
             }
-            
+
             // Check global variables
             if (_globalVariables.TryGetValue(name, out var globalVarInfo))
             {
@@ -193,7 +193,7 @@ namespace TSqlColumnLineage.Domain.Context
                 };
                 return;
             }
-            
+
             // Variable not found, create in current scope
             var currentScope = GetCurrentScope();
             currentScope.Variables[name] = new VariableInfo
@@ -204,17 +204,17 @@ namespace TSqlColumnLineage.Domain.Context
                 IsParameter = false
             };
         }
-        
+
         /// <summary>
         /// Gets a variable value from the current scope chain
         /// </summary>
-        public VariableInfo GetVariable(string name)
+        public VariableInfo? GetVariable(string name)
         {
             if (string.IsNullOrEmpty(name))
                 return null;
-                
+
             name = _stringPool.Intern(name);
-            
+
             // Try to find variable in current scope chain
             var stack = EnsureScopeStack();
             for (int i = stack.Count - 1; i >= 0; i--)
@@ -225,16 +225,16 @@ namespace TSqlColumnLineage.Domain.Context
                     return varInfo;
                 }
             }
-            
+
             // Check global variables
             if (_globalVariables.TryGetValue(name, out var globalVarInfo))
             {
                 return globalVarInfo;
             }
-            
+
             return null;
         }
-        
+
         /// <summary>
         /// Adds a table alias
         /// </summary>
@@ -242,13 +242,13 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(alias) || string.IsNullOrEmpty(tableName))
                 return;
-                
+
             alias = _stringPool.Intern(alias);
             tableName = _stringPool.Intern(tableName);
-            
+
             _tableAliases[alias] = tableName;
         }
-        
+
         /// <summary>
         /// Resolves a table name from an alias
         /// </summary>
@@ -256,17 +256,17 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(nameOrAlias))
                 return null;
-                
+
             nameOrAlias = _stringPool.Intern(nameOrAlias);
-            
+
             if (_tableAliases.TryGetValue(nameOrAlias, out var tableName))
             {
                 return tableName;
             }
-            
+
             return nameOrAlias;
         }
-        
+
         /// <summary>
         /// Registers a table
         /// </summary>
@@ -274,9 +274,9 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(tableName))
                 return;
-                
+
             tableName = _stringPool.Intern(tableName);
-            
+
             if (tableName.StartsWith("#"))
             {
                 // Temporary table
@@ -293,7 +293,7 @@ namespace TSqlColumnLineage.Domain.Context
                 _tables[tableName] = tableId;
             }
         }
-        
+
         /// <summary>
         /// Registers a CTE
         /// </summary>
@@ -301,11 +301,11 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(cteName))
                 return;
-                
+
             cteName = _stringPool.Intern(cteName);
             _cteDefinitions[cteName] = tableId;
         }
-        
+
         /// <summary>
         /// Registers a procedure
         /// </summary>
@@ -313,11 +313,11 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(procedureName))
                 return;
-                
+
             procedureName = _stringPool.Intern(procedureName);
             _procedures[procedureName] = procedureId;
         }
-        
+
         /// <summary>
         /// Gets a table ID
         /// </summary>
@@ -325,37 +325,37 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(tableName))
                 return -1;
-                
+
             tableName = _stringPool.Intern(tableName);
             tableName = ResolveTableAlias(tableName);
-            
+
             // Check temporary tables
             if (tableName.StartsWith("#") && _tempTables.TryGetValue(tableName, out var tempId))
             {
                 return tempId;
             }
-            
+
             // Check table variables
             if (tableName.StartsWith("@") && _tableVariables.TryGetValue(tableName, out var varId))
             {
                 return varId;
             }
-            
+
             // Check CTEs
             if (_cteDefinitions.TryGetValue(tableName, out var cteId))
             {
                 return cteId;
             }
-            
+
             // Check regular tables
             if (_tables.TryGetValue(tableName, out var tableId))
             {
                 return tableId;
             }
-            
+
             return -1;
         }
-        
+
         /// <summary>
         /// Gets a procedure ID
         /// </summary>
@@ -363,17 +363,17 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(procedureName))
                 return -1;
-                
+
             procedureName = _stringPool.Intern(procedureName);
-            
+
             if (_procedures.TryGetValue(procedureName, out var procId))
             {
                 return procId;
             }
-            
+
             return -1;
         }
-        
+
         /// <summary>
         /// Gets a column node
         /// </summary>
@@ -381,16 +381,16 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(columnName))
                 return -1;
-                
+
             tableName = _stringPool.Intern(tableName);
             columnName = _stringPool.Intern(columnName);
-            
+
             // Resolve alias
             tableName = ResolveTableAlias(tableName);
-            
+
             return _graph.GetColumnNode(tableName, columnName);
         }
-        
+
         /// <summary>
         /// Sets a state value
         /// </summary>
@@ -398,9 +398,9 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(key))
                 return;
-                
+
             key = _stringPool.Intern(key);
-            
+
             if (value == null)
             {
                 _state.TryRemove(key, out _);
@@ -410,7 +410,7 @@ namespace TSqlColumnLineage.Domain.Context
                 _state[key] = value;
             }
         }
-        
+
         /// <summary>
         /// Gets a state value
         /// </summary>
@@ -418,36 +418,36 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(key))
                 return null;
-                
+
             key = _stringPool.Intern(key);
-            
+
             if (_state.TryGetValue(key, out var value))
             {
                 return value;
             }
-            
+
             return null;
         }
-        
+
         /// <summary>
         /// Gets a boolean state value
         /// </summary>
         public bool GetBoolState(string key, bool defaultValue = false)
         {
             var value = GetState(key);
-            
+
             if (value == null)
                 return defaultValue;
-                
+
             if (value is bool boolValue)
                 return boolValue;
-                
+
             if (value is string strValue)
                 return !string.IsNullOrEmpty(strValue) && strValue.Equals("true", StringComparison.OrdinalIgnoreCase);
-                
+
             return defaultValue;
         }
-        
+
         /// <summary>
         /// Stops all processing
         /// </summary>
@@ -455,57 +455,57 @@ namespace TSqlColumnLineage.Domain.Context
         {
             _cancellationSource.Cancel();
         }
-        
+
         /// <summary>
         /// Gets all tables
         /// </summary>
         public Dictionary<string, int> GetAllTables()
         {
             var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            
+
             // Add all regular tables
             foreach (var kvp in _tables)
             {
                 result[kvp.Key] = kvp.Value;
             }
-            
+
             // Add temporary tables
             foreach (var kvp in _tempTables)
             {
                 result[kvp.Key] = kvp.Value;
             }
-            
+
             // Add table variables
             foreach (var kvp in _tableVariables)
             {
                 result[kvp.Key] = kvp.Value;
             }
-            
+
             // Add CTEs
             foreach (var kvp in _cteDefinitions)
             {
                 result[kvp.Key] = kvp.Value;
             }
-            
+
             return result;
         }
-        
+
         /// <summary>
         /// Ensures the scope stack exists for the current thread
         /// </summary>
         private Stack<ScopeFrame> EnsureScopeStack()
         {
             var stack = _scopeStacks.Value;
-            
+
             if (stack.Count == 0)
             {
                 // Initialize with global scope
                 stack.Push(new ScopeFrame(ScopeType.Global));
             }
-            
+
             return stack;
         }
-        
+
         /// <summary>
         /// Gets the current scope
         /// </summary>
@@ -513,7 +513,7 @@ namespace TSqlColumnLineage.Domain.Context
         {
             return EnsureScopeStack().Peek();
         }
-        
+
         /// <summary>
         /// Disposes resources
         /// </summary>
@@ -522,43 +522,36 @@ namespace TSqlColumnLineage.Domain.Context
             _scopeStacks.Dispose();
             _cancellationSource.Dispose();
         }
-        
+
         /// <summary>
         /// Disposable class for automatic scope management
         /// </summary>
-        private class ScopeDisposer : IDisposable
+        private class ScopeDisposer(ContextManager manager) : IDisposable
         {
-            private readonly ContextManager _manager;
-            
-            public ScopeDisposer(ContextManager manager)
-            {
-                _manager = manager;
-            }
-            
             public void Dispose()
             {
-                _manager.PopScope();
+                manager.PopScope();
             }
         }
-        
+
         /// <summary>
         /// Simple string pool for memory optimization
         /// </summary>
         private class StringPool
         {
-            private readonly ConcurrentDictionary<string, string> _pool = 
-                new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
-                
+            private readonly ConcurrentDictionary<string, string> _pool =
+                new(StringComparer.Ordinal);
+
             public string Intern(string str)
             {
                 if (string.IsNullOrEmpty(str))
                     return str;
-                    
+
                 return _pool.GetOrAdd(str, str);
             }
         }
     }
-    
+
     /// <summary>
     /// Types of execution scopes
     /// </summary>
@@ -574,23 +567,17 @@ namespace TSqlColumnLineage.Domain.Context
         TryCatch,       // TRY/CATCH block scope
         Query           // Query scope
     }
-    
+
     /// <summary>
     /// Represents a scope frame
     /// </summary>
-    internal class ScopeFrame
+    internal class ScopeFrame(ScopeType scopeType, string name = "")
     {
-        public ScopeType ScopeType { get; }
-        public string Name { get; }
+        public ScopeType ScopeType { get; } = scopeType;
+        public string Name { get; } = name;
         public Dictionary<string, VariableInfo> Variables { get; } = new Dictionary<string, VariableInfo>(StringComparer.OrdinalIgnoreCase);
-        
-        public ScopeFrame(ScopeType scopeType, string name = null)
-        {
-            ScopeType = scopeType;
-            Name = name;
-        }
     }
-    
+
     /// <summary>
     /// Information about a variable
     /// </summary>
@@ -600,7 +587,7 @@ namespace TSqlColumnLineage.Domain.Context
         public string DataType { get; set; } = string.Empty;
         public object Value { get; set; } = string.Empty;
         public bool IsParameter { get; set; }
-        
+
         public override string ToString()
         {
             return $"{Name} ({DataType}){(IsParameter ? " [Parameter]" : "")}";

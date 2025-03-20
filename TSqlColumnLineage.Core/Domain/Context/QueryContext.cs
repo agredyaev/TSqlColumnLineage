@@ -2,47 +2,47 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using TSqlColumnLineage.Domain.Graph;
+using TSqlColumnLineage.Core.Domain.Graph;
 
-namespace TSqlColumnLineage.Domain.Context
+namespace TSqlColumnLineage.Core.Domain.Context
 {
     /// <summary>
     /// Maintains context for a specific SQL query during lineage analysis.
     /// Optimized for memory efficiency using data-oriented design principles.
     /// </summary>
-    public sealed class QueryContext
+    /// <remarks>
+    /// Creates a new query context
+    /// </remarks>
+    public sealed class QueryContext(ContextManager contextManager, string queryText)
     {
         // The parent context manager
-        private readonly ContextManager _contextManager;
-        
-        // Query-specific data
-        private string _queryText;
-        private DateTime _startTime;
+        private readonly ContextManager _contextManager = contextManager ?? throw new ArgumentNullException(nameof(contextManager));
+        private readonly DateTime _startTime = DateTime.UtcNow;
         private int _fragmentCount;
-        private int _maxFragments;
-        private TimeSpan _maxDuration;
-        private readonly CancellationTokenSource _cancellationTokenSource;
-        
+        private readonly int _maxFragments = 0;
+        private readonly TimeSpan _maxDuration = TimeSpan.Zero;
+        private readonly CancellationTokenSource _cancellationTokenSource = new();
+
         // Query column context (source/target columns)
-        private readonly Dictionary<string, List<int>> _outputColumns = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, List<int>> _inputTables = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-        
+        private readonly Dictionary<string, List<int>> _outputColumns = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<int>> _inputTables = new(StringComparer.OrdinalIgnoreCase);
+
         // Query table alias tracking
-        private readonly Dictionary<string, string> _localAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        
+        private readonly Dictionary<string, string> _localAliases = new(StringComparer.OrdinalIgnoreCase);
+
         // Current state
-        private readonly Dictionary<string, object> _queryState = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-        
+        private readonly Dictionary<string, object> _queryState = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>
         /// Gets the lineage graph
         /// </summary>
         public LineageGraph Graph => _contextManager.Graph;
-        
+
         /// <summary>
         /// Gets the query text
         /// </summary>
-        public string QueryText => _queryText;
-        
+        public string QueryText => queryText;
+
         /// <summary>
         /// Gets a flag indicating whether the query should stop processing
         /// </summary>
@@ -53,36 +53,23 @@ namespace TSqlColumnLineage.Domain.Context
                 // Stop if parent context is stopped
                 if (_contextManager.ShouldStop)
                     return true;
-                    
+
                 // Stop if this query is canceled
                 if (_cancellationTokenSource.IsCancellationRequested)
                     return true;
-                    
+
                 // Stop if max fragments exceeded
                 if (_maxFragments > 0 && _fragmentCount > _maxFragments)
                     return true;
-                    
+
                 // Stop if max duration exceeded
                 if (_maxDuration > TimeSpan.Zero && DateTime.UtcNow - _startTime > _maxDuration)
                     return true;
-                    
+
                 return false;
             }
         }
-        
-        /// <summary>
-        /// Creates a new query context
-        /// </summary>
-        public QueryContext(ContextManager contextManager, string queryText)
-        {
-            _contextManager = contextManager ?? throw new ArgumentNullException(nameof(contextManager));
-            _queryText = queryText;
-            _startTime = DateTime.UtcNow;
-            _maxFragments = 0;
-            _maxDuration = TimeSpan.Zero;
-            _cancellationTokenSource = new CancellationTokenSource();
-        }
-        
+
         /// <summary>
         /// Creates a new query context with limits
         /// </summary>
@@ -92,15 +79,15 @@ namespace TSqlColumnLineage.Domain.Context
             _maxFragments = maxFragments;
             _maxDuration = maxDuration;
         }
-        
+
         /// <summary>
         /// Creates a query scope that will be popped when disposed
         /// </summary>
-        public IDisposable CreateQueryScope(string name = null)
+        public IDisposable CreateQueryScope(string name = "")
         {
             return _contextManager.CreateScope(ScopeType.Query, name);
         }
-        
+
         /// <summary>
         /// Adds an output column for the query
         /// </summary>
@@ -108,19 +95,19 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(tableName))
                 return;
-                
+
             if (!_outputColumns.TryGetValue(tableName, out var columns))
             {
-                columns = new List<int>();
+                columns = [];
                 _outputColumns[tableName] = columns;
             }
-            
+
             if (!columns.Contains(columnId))
             {
                 columns.Add(columnId);
             }
         }
-        
+
         /// <summary>
         /// Adds an input table for the query
         /// </summary>
@@ -128,19 +115,19 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(tableName))
                 return;
-                
+
             if (!_inputTables.TryGetValue(tableName, out var tables))
             {
-                tables = new List<int>();
+                tables = [];
                 _inputTables[tableName] = tables;
             }
-            
+
             if (!tables.Contains(tableId))
             {
                 tables.Add(tableId);
             }
         }
-        
+
         /// <summary>
         /// Adds a local table alias
         /// </summary>
@@ -148,13 +135,13 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(alias) || string.IsNullOrEmpty(tableName))
                 return;
-                
+
             _localAliases[alias] = tableName;
-            
+
             // Also add to global aliases
             _contextManager.AddTableAlias(alias, tableName);
         }
-        
+
         /// <summary>
         /// Resolves a table name from a local alias
         /// </summary>
@@ -162,17 +149,17 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(nameOrAlias))
                 return null;
-                
+
             // Check local aliases first
             if (_localAliases.TryGetValue(nameOrAlias, out var tableName))
             {
                 return tableName;
             }
-            
+
             // Fall back to global aliases
             return _contextManager.ResolveTableAlias(nameOrAlias);
         }
-        
+
         /// <summary>
         /// Gets a table ID
         /// </summary>
@@ -180,13 +167,13 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(tableName))
                 return -1;
-                
+
             // Resolve alias
             tableName = ResolveLocalAlias(tableName);
-            
+
             return _contextManager.GetTableId(tableName);
         }
-        
+
         /// <summary>
         /// Gets a column node
         /// </summary>
@@ -194,13 +181,13 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(columnName))
                 return -1;
-                
+
             // Resolve alias
             tableName = ResolveLocalAlias(tableName);
-            
+
             return _contextManager.GetColumnNode(tableName, columnName);
         }
-        
+
         /// <summary>
         /// Sets a query state value
         /// </summary>
@@ -208,7 +195,7 @@ namespace TSqlColumnLineage.Domain.Context
         {
             if (string.IsNullOrEmpty(key))
                 return;
-                
+
             if (value == null)
             {
                 _queryState.Remove(key);
@@ -218,42 +205,42 @@ namespace TSqlColumnLineage.Domain.Context
                 _queryState[key] = value;
             }
         }
-        
+
         /// <summary>
         /// Gets a query state value
         /// </summary>
-        public object GetQueryState(string key)
+        public object? GetQueryState(string key)
         {
             if (string.IsNullOrEmpty(key))
                 return null;
-                
+
             if (_queryState.TryGetValue(key, out var value))
             {
                 return value;
             }
-            
+
             return null;
         }
-        
+
         /// <summary>
         /// Gets a boolean query state value
         /// </summary>
         public bool GetBoolQueryState(string key, bool defaultValue = false)
         {
             var value = GetQueryState(key);
-            
+
             if (value == null)
                 return defaultValue;
-                
+
             if (value is bool boolValue)
                 return boolValue;
-                
+
             if (value is string strValue)
                 return !string.IsNullOrEmpty(strValue) && strValue.Equals("true", StringComparison.OrdinalIgnoreCase);
-                
+
             return defaultValue;
         }
-        
+
         /// <summary>
         /// Increments the fragment count
         /// </summary>
@@ -261,37 +248,37 @@ namespace TSqlColumnLineage.Domain.Context
         {
             Interlocked.Increment(ref _fragmentCount);
         }
-        
+
         /// <summary>
         /// Gets all output columns
         /// </summary>
         public Dictionary<string, List<int>> GetOutputColumns()
         {
             var result = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-            
+
             foreach (var kvp in _outputColumns)
             {
                 result[kvp.Key] = new List<int>(kvp.Value);
             }
-            
+
             return result;
         }
-        
+
         /// <summary>
         /// Gets all input tables
         /// </summary>
         public Dictionary<string, List<int>> GetInputTables()
         {
             var result = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-            
+
             foreach (var kvp in _inputTables)
             {
                 result[kvp.Key] = new List<int>(kvp.Value);
             }
-            
+
             return result;
         }
-        
+
         /// <summary>
         /// Returns query statistics
         /// </summary>
@@ -300,7 +287,7 @@ namespace TSqlColumnLineage.Domain.Context
             int outputColumnCount = _outputColumns.Values.Sum(v => v.Count);
             int inputTableCount = _inputTables.Count;
             TimeSpan duration = DateTime.UtcNow - _startTime;
-            
+
             return new QueryStats
             {
                 FragmentCount = _fragmentCount,
@@ -310,7 +297,7 @@ namespace TSqlColumnLineage.Domain.Context
                 Stopped = ShouldStop
             };
         }
-        
+
         /// <summary>
         /// Cancels the query processing
         /// </summary>
@@ -318,7 +305,7 @@ namespace TSqlColumnLineage.Domain.Context
         {
             _cancellationTokenSource.Cancel();
         }
-        
+
         /// <summary>
         /// Disposes resources
         /// </summary>
@@ -327,7 +314,7 @@ namespace TSqlColumnLineage.Domain.Context
             _cancellationTokenSource.Dispose();
         }
     }
-    
+
     /// <summary>
     /// Query statistics
     /// </summary>
@@ -338,7 +325,7 @@ namespace TSqlColumnLineage.Domain.Context
         public int InputTableCount { get; set; }
         public int DurationMs { get; set; }
         public bool Stopped { get; set; }
-        
+
         public override string ToString()
         {
             return $"Processed {FragmentCount} fragments in {DurationMs}ms, " +

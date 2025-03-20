@@ -3,38 +3,33 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 
-namespace TSqlColumnLineage.Domain.Graph
+namespace TSqlColumnLineage.Core.Domain.Graph
 {
     /// <summary>
     /// High-performance graph structure for SQL column lineage analysis
     /// using data-oriented design principles.
     /// </summary>
-    public sealed class LineageGraph
+    /// <remarks>
+    /// Creates a new lineage graph with specified initial capacity
+    /// </remarks>
+    public sealed class LineageGraph(int initialNodeCapacity = 1024, int initialEdgeCapacity = 2048)
     {
         // Underlying storage implementation
-        private readonly GraphStorage _storage;
-        
+        private readonly GraphStorage _storage = new(initialNodeCapacity, initialEdgeCapacity);
+
         // Metadata
-        private readonly Dictionary<string, object> _metadata = new Dictionary<string, object>();
-        
+        private readonly Dictionary<string, object> _metadata = [];
+
         // Source SQL script
         public string SourceSql { get; set; } = string.Empty;
-        
+
         // Creation timestamp
         public DateTime CreatedAt { get; } = DateTime.UtcNow;
-        
+
         // Statistics
         private long _totalOperations;
-        private readonly CancellationTokenSource _cancellationSource = new CancellationTokenSource();
-        
-        /// <summary>
-        /// Creates a new lineage graph with specified initial capacity
-        /// </summary>
-        public LineageGraph(int initialNodeCapacity = 1024, int initialEdgeCapacity = 2048)
-        {
-            _storage = new GraphStorage(initialNodeCapacity, initialEdgeCapacity);
-        }
-        
+        private readonly CancellationTokenSource _cancellationSource = new();
+
         /// <summary>
         /// Adds a column node to the graph
         /// </summary>
@@ -42,14 +37,14 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             if (string.IsNullOrEmpty(name))
                 throw new ArgumentException("Column name cannot be null or empty", nameof(name));
-                
+
             if (string.IsNullOrEmpty(tableName))
                 throw new ArgumentException("Table name cannot be null or empty", nameof(tableName));
-                
+
             Interlocked.Increment(ref _totalOperations);
             return _storage.AddColumnNode(name, tableName, dataType, isNullable, isComputed);
         }
-        
+
         /// <summary>
         /// Adds a table node to the graph
         /// </summary>
@@ -57,11 +52,11 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             if (string.IsNullOrEmpty(name))
                 throw new ArgumentException("Table name cannot be null or empty", nameof(name));
-                
+
             Interlocked.Increment(ref _totalOperations);
             return _storage.AddTableNode(name, tableType, alias, definition);
         }
-        
+
         /// <summary>
         /// Adds an expression node to the graph
         /// </summary>
@@ -69,14 +64,14 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             if (string.IsNullOrEmpty(name))
                 throw new ArgumentException("Expression name cannot be null or empty", nameof(name));
-                
+
             if (string.IsNullOrEmpty(expressionText))
                 throw new ArgumentException("Expression text cannot be null or empty", nameof(expressionText));
-                
+
             Interlocked.Increment(ref _totalOperations);
             return _storage.AddExpressionNode(name, expressionText, expressionType, resultType, tableOwner);
         }
-        
+
         /// <summary>
         /// Adds a column to a table
         /// </summary>
@@ -85,7 +80,7 @@ namespace TSqlColumnLineage.Domain.Graph
             Interlocked.Increment(ref _totalOperations);
             _storage.AddColumnToTable(tableId, columnId);
         }
-        
+
         /// <summary>
         /// Adds a direct lineage edge between two columns
         /// </summary>
@@ -94,7 +89,7 @@ namespace TSqlColumnLineage.Domain.Graph
             Interlocked.Increment(ref _totalOperations);
             return _storage.AddEdge(sourceColumnId, targetColumnId, EdgeType.Direct, operation, sqlExpression);
         }
-        
+
         /// <summary>
         /// Adds an indirect lineage edge via an expression
         /// </summary>
@@ -103,7 +98,7 @@ namespace TSqlColumnLineage.Domain.Graph
             Interlocked.Increment(ref _totalOperations);
             return _storage.AddEdge(sourceColumnId, expressionId, EdgeType.Indirect, operation, sqlExpression);
         }
-        
+
         /// <summary>
         /// Adds a join relationship between columns
         /// </summary>
@@ -112,7 +107,7 @@ namespace TSqlColumnLineage.Domain.Graph
             Interlocked.Increment(ref _totalOperations);
             return _storage.AddEdge(leftColumnId, rightColumnId, EdgeType.Join, joinType);
         }
-        
+
         /// <summary>
         /// Gets a column node by table and column name
         /// </summary>
@@ -120,7 +115,7 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             return _storage.GetColumnNode(tableName, columnName);
         }
-        
+
         /// <summary>
         /// Gets all lineage paths from source to target column
         /// </summary>
@@ -128,27 +123,27 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             var paths = _storage.FindPaths(sourceColumnId, targetColumnId, maxDepth);
             var result = new List<LineagePath>();
-            
+
             foreach (var path in paths)
             {
                 var lineagePath = new LineagePath
                 {
                     SourceId = sourceColumnId,
                     TargetId = targetColumnId,
-                    Edges = new List<EdgeData>()
+                    Edges = []
                 };
-                
+
                 foreach (var edgeId in path)
                 {
                     lineagePath.Edges.Add(_storage.GetEdgeData(edgeId));
                 }
-                
+
                 result.Add(lineagePath);
             }
-            
+
             return result;
         }
-        
+
         /// <summary>
         /// Gets node data by id
         /// </summary>
@@ -156,7 +151,7 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             return _storage.GetNodeData(nodeId);
         }
-        
+
         /// <summary>
         /// Gets edge data by id
         /// </summary>
@@ -164,7 +159,7 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             return _storage.GetEdgeData(edgeId);
         }
-        
+
         /// <summary>
         /// Gets all source columns for a target column
         /// </summary>
@@ -172,21 +167,21 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             var result = new List<int>();
             var edgeIds = _storage.GetIncomingEdges(columnId);
-            
+
             foreach (var edgeId in edgeIds)
             {
                 var edge = _storage.GetEdgeData(edgeId);
-                
+
                 // Only include direct lineage
                 if (edge.Type == EdgeType.Direct)
                 {
                     result.Add(edge.SourceId);
                 }
             }
-            
+
             return result;
         }
-        
+
         /// <summary>
         /// Gets all target columns for a source column
         /// </summary>
@@ -194,29 +189,29 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             var result = new List<int>();
             var edgeIds = _storage.GetOutgoingEdges(columnId);
-            
+
             foreach (var edgeId in edgeIds)
             {
                 var edge = _storage.GetEdgeData(edgeId);
-                
+
                 // Only include direct lineage
                 if (edge.Type == EdgeType.Direct)
                 {
                     result.Add(edge.TargetId);
                 }
             }
-            
+
             return result;
         }
-        
+
         /// <summary>
         /// Gets all columns in a table
         /// </summary>
         public List<int> GetTableColumns(int tableId)
         {
-            return _storage.GetTableColumns(tableId).ToList();
+            return [.. _storage.GetTableColumns(tableId)];
         }
-        
+
         /// <summary>
         /// Sets a metadata value
         /// </summary>
@@ -224,32 +219,32 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             if (string.IsNullOrEmpty(key))
                 throw new ArgumentException("Key cannot be null or empty", nameof(key));
-                
+
             lock (_metadata)
             {
                 _metadata[key] = value;
             }
         }
-        
+
         /// <summary>
         /// Gets a metadata value
         /// </summary>
-        public object GetMetadata(string key)
+        public object? GetMetadata(string key)
         {
             if (string.IsNullOrEmpty(key))
                 return null;
-                
+
             lock (_metadata)
             {
                 if (_metadata.TryGetValue(key, out var value))
                 {
                     return value;
                 }
-                
+
                 return null;
             }
         }
-        
+
         /// <summary>
         /// Cancels any ongoing operations
         /// </summary>
@@ -257,7 +252,7 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             _cancellationSource.Cancel();
         }
-        
+
         /// <summary>
         /// Optimizes the graph by compacting storage
         /// </summary>
@@ -265,7 +260,7 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             _storage.Compact();
         }
-        
+
         /// <summary>
         /// Gets statistics about the graph
         /// </summary>
@@ -273,7 +268,7 @@ namespace TSqlColumnLineage.Domain.Graph
         {
             var (totalNodes, columnNodes, tableNodes, expressionNodes) = _storage.GetNodeStatistics();
             var (totalEdges, directEdges, indirectEdges, joinEdges) = _storage.GetEdgeStatistics();
-            
+
             return new GraphStatistics
             {
                 TotalNodes = totalNodes,
@@ -288,7 +283,7 @@ namespace TSqlColumnLineage.Domain.Graph
             };
         }
     }
-    
+
     /// <summary>
     /// Represents a lineage path between source and target column
     /// </summary>
@@ -296,14 +291,14 @@ namespace TSqlColumnLineage.Domain.Graph
     {
         public int SourceId { get; set; }
         public int TargetId { get; set; }
-        public List<EdgeData> Edges { get; set; } = new List<EdgeData>();
-        
+        public List<EdgeData> Edges { get; set; } = [];
+
         public override string ToString()
         {
             return $"Path from {SourceId} to {TargetId} with {Edges.Count} edges";
         }
     }
-    
+
     /// <summary>
     /// Statistics about the graph
     /// </summary>
@@ -313,14 +308,14 @@ namespace TSqlColumnLineage.Domain.Graph
         public int ColumnNodes { get; set; }
         public int TableNodes { get; set; }
         public int ExpressionNodes { get; set; }
-        
+
         public int TotalEdges { get; set; }
         public int DirectEdges { get; set; }
         public int IndirectEdges { get; set; }
         public int JoinEdges { get; set; }
-        
+
         public long TotalOperations { get; set; }
-        
+
         public override string ToString()
         {
             return $"Nodes: {TotalNodes} ({ColumnNodes} columns, {TableNodes} tables, {ExpressionNodes} expressions), " +

@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using TSqlColumnLineage.Infrastructure.Memory;
+using TSqlColumnLineage.Core.Infrastructure.Memory;
 
-namespace TSqlColumnLineage.Domain.Graph
+namespace TSqlColumnLineage.Core.Domain.Graph
 {
     /// <summary>
     /// Extension methods for LineageGraph to handle SQL operations
@@ -11,28 +11,27 @@ namespace TSqlColumnLineage.Domain.Graph
     public static class LineageGraphExtensions
     {
         // Cache of recently created SQL operations
-        private static readonly Dictionary<string, SqlOperation> _operationCache = 
-            new Dictionary<string, SqlOperation>(StringComparer.OrdinalIgnoreCase);
-            
+        private static readonly Dictionary<string, SqlOperation> _operationCache =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Cache size limit
         private const int MaxCacheSize = 1000;
-        
+
         /// <summary>
         /// Adds a SQL operation to the lineage graph
         /// </summary>
-        public static SqlOperation AddSqlOperation(this LineageGraph graph, 
+        public static SqlOperation AddSqlOperation(this LineageGraph graph,
             SqlOperationType type, string name, string sqlText = "", string sourceLocation = "")
         {
-            if (graph == null)
-                throw new ArgumentNullException(nameof(graph));
-                
+            ArgumentNullException.ThrowIfNull(graph);
+
             // Optimize memory
             name = MemoryManager.Instance.InternString(name ?? string.Empty);
             sourceLocation = MemoryManager.Instance.InternString(sourceLocation ?? string.Empty);
-            
+
             // Create operation ID based on hash of operation details
             string operationKey = $"{type}:{name}:{sourceLocation}:{sqlText.GetHashCode()}";
-            
+
             // Check cache first
             lock (_operationCache)
             {
@@ -40,7 +39,7 @@ namespace TSqlColumnLineage.Domain.Graph
                 {
                     return cachedOperation;
                 }
-                
+
                 // Cleanup cache if needed
                 if (_operationCache.Count >= MaxCacheSize)
                 {
@@ -52,38 +51,36 @@ namespace TSqlColumnLineage.Domain.Graph
                     }
                 }
             }
-            
+
             // Generate unique ID for operation
             int operationId = graph.GetMetadata("OperationCount") as int? ?? 0;
             graph.SetMetadata("OperationCount", operationId + 1);
-            
+
             // Create operation
             var operation = new SqlOperation(operationId, type, name, sqlText, sourceLocation);
-            
+
             // Add to cache
             lock (_operationCache)
             {
                 _operationCache[operationKey] = operation;
             }
-            
+
             // Add operation to graph metadata
             graph.SetMetadata($"Operation:{operationId}", operation);
-            
+
             return operation;
         }
-        
+
         /// <summary>
         /// Links a SQL operation to source and target columns in the lineage graph
         /// </summary>
         public static void LinkOperation(this LineageGraph graph, SqlOperation operation,
             IEnumerable<int> sourceColumnIds, IEnumerable<int> targetColumnIds)
         {
-            if (graph == null)
-                throw new ArgumentNullException(nameof(graph));
-                
-            if (operation == null)
-                throw new ArgumentNullException(nameof(operation));
-                
+            ArgumentNullException.ThrowIfNull(graph);
+
+            ArgumentNullException.ThrowIfNull(operation);
+
             // Add sources and targets to operation
             if (sourceColumnIds != null)
             {
@@ -92,7 +89,7 @@ namespace TSqlColumnLineage.Domain.Graph
                     operation.AddSourceColumn(sourceId);
                 }
             }
-            
+
             if (targetColumnIds != null)
             {
                 foreach (var targetId in targetColumnIds)
@@ -100,7 +97,7 @@ namespace TSqlColumnLineage.Domain.Graph
                     operation.AddTargetColumn(targetId);
                 }
             }
-            
+
             // Create lineage edges between sources and targets
             if (sourceColumnIds != null && targetColumnIds != null)
             {
@@ -110,15 +107,15 @@ namespace TSqlColumnLineage.Domain.Graph
                     {
                         // Create lineage edge with operation type as the operation
                         graph.AddDirectLineage(
-                            sourceId, 
-                            targetId, 
-                            operation.Type.ToString(), 
+                            sourceId,
+                            targetId,
+                            operation.Type.ToString(),
                             operation.SqlText);
                     }
                 }
             }
         }
-        
+
         /// <summary>
         /// Processes a SQL SELECT operation in the lineage graph
         /// </summary>
@@ -127,16 +124,15 @@ namespace TSqlColumnLineage.Domain.Graph
             IEnumerable<(string SourceTable, string SourceColumn)> sourceCols,
             IEnumerable<(string TargetTable, string TargetColumn)> targetCols)
         {
-            if (graph == null)
-                throw new ArgumentNullException(nameof(graph));
-                
+            ArgumentNullException.ThrowIfNull(graph);
+
             // Create operation
             var operation = graph.AddSqlOperation(
-                SqlOperationType.Select, 
-                queryName, 
-                sqlText, 
+                SqlOperationType.Select,
+                queryName,
+                sqlText,
                 sourceLocation);
-                
+
             // Get source column IDs
             var sourceIds = new List<int>();
             if (sourceCols != null)
@@ -156,7 +152,7 @@ namespace TSqlColumnLineage.Domain.Graph
                     }
                 }
             }
-            
+
             // Get target column IDs
             var targetIds = new List<int>();
             if (targetCols != null)
@@ -176,13 +172,13 @@ namespace TSqlColumnLineage.Domain.Graph
                     }
                 }
             }
-            
+
             // Link operation in graph
             graph.LinkOperation(operation, sourceIds, targetIds);
-            
+
             return operation;
         }
-        
+
         /// <summary>
         /// Processes a SQL INSERT operation in the lineage graph
         /// </summary>
@@ -191,16 +187,15 @@ namespace TSqlColumnLineage.Domain.Graph
             IEnumerable<(string SourceTable, string SourceColumn)> sourceCols,
             IEnumerable<string> targetCols)
         {
-            if (graph == null)
-                throw new ArgumentNullException(nameof(graph));
-                
+            ArgumentNullException.ThrowIfNull(graph);
+
             // Create operation
             var operation = graph.AddSqlOperation(
-                SqlOperationType.Insert, 
-                tableName, 
-                sqlText, 
+                SqlOperationType.Insert,
+                tableName,
+                sqlText,
                 sourceLocation);
-                
+
             // Get source column IDs
             var sourceIds = new List<int>();
             if (sourceCols != null)
@@ -220,7 +215,7 @@ namespace TSqlColumnLineage.Domain.Graph
                     }
                 }
             }
-            
+
             // Get target column IDs
             var targetIds = new List<int>();
             if (targetCols != null)
@@ -240,13 +235,13 @@ namespace TSqlColumnLineage.Domain.Graph
                     }
                 }
             }
-            
+
             // Link operation in graph
             graph.LinkOperation(operation, sourceIds, targetIds);
-            
+
             return operation;
         }
-        
+
         /// <summary>
         /// Processes a SQL UPDATE operation in the lineage graph
         /// </summary>
@@ -255,16 +250,15 @@ namespace TSqlColumnLineage.Domain.Graph
             IEnumerable<(string SourceTable, string SourceColumn)> sourceCols,
             IEnumerable<string> targetCols)
         {
-            if (graph == null)
-                throw new ArgumentNullException(nameof(graph));
-                
+            ArgumentNullException.ThrowIfNull(graph);
+
             // Create operation
             var operation = graph.AddSqlOperation(
-                SqlOperationType.Update, 
-                tableName, 
-                sqlText, 
+                SqlOperationType.Update,
+                tableName,
+                sqlText,
                 sourceLocation);
-                
+
             // Get source column IDs
             var sourceIds = new List<int>();
             if (sourceCols != null)
@@ -284,7 +278,7 @@ namespace TSqlColumnLineage.Domain.Graph
                     }
                 }
             }
-            
+
             // Get target column IDs (in the same table)
             var targetIds = new List<int>();
             if (targetCols != null)
@@ -304,33 +298,31 @@ namespace TSqlColumnLineage.Domain.Graph
                     }
                 }
             }
-            
+
             // Link operation in graph
             graph.LinkOperation(operation, sourceIds, targetIds);
-            
+
             return operation;
         }
-        
+
         /// <summary>
         /// Gets all SQL operations registered in the graph
         /// </summary>
         public static List<SqlOperation> GetAllOperations(this LineageGraph graph)
         {
-            if (graph == null)
-                throw new ArgumentNullException(nameof(graph));
-                
+            ArgumentNullException.ThrowIfNull(graph);
+
             var result = new List<SqlOperation>();
             int operationCount = graph.GetMetadata("OperationCount") as int? ?? 0;
-            
+
             for (int i = 0; i < operationCount; i++)
             {
-                var operation = graph.GetMetadata($"Operation:{i}") as SqlOperation;
-                if (operation != null)
+                if (graph.GetMetadata($"Operation:{i}") is SqlOperation operation)
                 {
                     result.Add(operation);
                 }
             }
-            
+
             return result;
         }
     }
