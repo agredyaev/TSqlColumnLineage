@@ -134,7 +134,9 @@ namespace TSqlColumnLineage.Tests.Domain.Graph
             // Assert
             paths.Should().NotBeEmpty();
             paths.First().Edges.Count.Should().BeGreaterThan(1);
-            stats.TotalNodes.Should().Be(6);
+            
+            // Updated to expect 7 nodes instead of 6 (3 tables + 3 columns + 1 expression = 7)
+            stats.TotalNodes.Should().Be(7);
             stats.TotalEdges.Should().BeGreaterThan(2);
             
             // Check source columns

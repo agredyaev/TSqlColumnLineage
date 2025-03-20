@@ -49,9 +49,11 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
                 {
                     try
                     {
-                        using var readLock = manager.AcquireReadLock(key);
-                        // Simulate some work with the lock
-                        Thread.Sleep(50);
+                        using (var readLock = manager.AcquireReadLock(key))
+                        {
+                            // Simulate some work with the lock
+                            Thread.Sleep(50);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -96,9 +98,11 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
                     {
                         for (int j = 0; j < incrementsPerWriter; j++)
                         {
-                            using var writeLock = manager.AcquireWriteLock(key);
-                            // Critical section - increment shared value
-                            value++;
+                            using (var writeLock = manager.AcquireWriteLock(key))
+                            {
+                                // Critical section - increment shared value
+                                value++;
+                            }
                         }
                     }
                     finally
@@ -131,19 +135,21 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             // Start a writer that holds the lock for some time
             var writerTask = Task.Run(() =>
             {
-                using var writeLock = manager.AcquireWriteLock(key);
-                Interlocked.Increment(ref writersRunning);
-
-                // Hold the write lock for a moment
-                Thread.Sleep(500);
-
-                // Set the flag while holding the write lock
-                sharedFlag = true;
-
-                // Verify no readers are running while we hold write lock
-                Interlocked.CompareExchange(ref readersRunning, 0, 0).Should().Be(0);
-
-                Interlocked.Decrement(ref writersRunning);
+                using (var writeLock = manager.AcquireWriteLock(key))
+                {
+                    Interlocked.Increment(ref writersRunning);
+                    
+                    // Hold the write lock for a moment
+                    Thread.Sleep(500);
+                    
+                    // Set the flag while holding the write lock
+                    sharedFlag = true;
+                    
+                    // Verify no readers are running while we hold write lock
+                    Interlocked.CompareExchange(ref readersRunning, 0, 0).Should().Be(0);
+                    
+                    Interlocked.Decrement(ref writersRunning);
+                }
             });
             
             // Give the writer time to acquire the lock
@@ -155,25 +161,27 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             {
                 readerTasks.Add(Task.Run(() =>
                 {
-                    using var readLock = manager.AcquireReadLock(key);
-                    Interlocked.Increment(ref readersRunning);
-
-                    // At this point, the writer should have completed
-                    // and set the flag to true
-                    sharedFlag.Should().BeTrue("writer should have set the flag before readers start");
-
-                    // Verify no writers are running while we hold read lock
-                    Interlocked.CompareExchange(ref writersRunning, 0, 0).Should().Be(0);
-
-                    // Hold the read lock for a moment
-                    Thread.Sleep(100);
-
-                    Interlocked.Decrement(ref readersRunning);
+                    using (var readLock = manager.AcquireReadLock(key))
+                    {
+                        Interlocked.Increment(ref readersRunning);
+                        
+                        // At this point, the writer should have completed
+                        // and set the flag to true
+                        sharedFlag.Should().BeTrue("writer should have set the flag before readers start");
+                        
+                        // Verify no writers are running while we hold read lock
+                        Interlocked.CompareExchange(ref writersRunning, 0, 0).Should().Be(0);
+                        
+                        // Hold the read lock for a moment
+                        Thread.Sleep(100);
+                        
+                        Interlocked.Decrement(ref readersRunning);
+                    }
                 }));
             }
-
+            
             // Wait for all tasks to complete
-            _ = Task.WhenAll(new[] { writerTask }.Concat(readerTasks)).Wait(TimeSpan.FromSeconds(5));
+            Task.WhenAll(new[] { writerTask }.Concat(readerTasks)).Wait(TimeSpan.FromSeconds(5));
             
             // Final checks
             sharedFlag.Should().BeTrue();
@@ -187,20 +195,47 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             // Arrange
             var manager = new PartitionedLockManager();
             var key = "timeout-key";
-
-            // Act - Create a long-running write lock
-            using var writeLock = manager.AcquireWriteLock(key);
-            // Try to acquire a read lock with a short timeout
-            using var readLock = manager.TryAcquireReadLock(key, 10);
-            // Assert
-            // The readLock should be a non-null placeholder that does nothing when disposed
-            readLock.Should().NotBeNull();
-
-            // The writer should still hold the lock exclusively
-            var stats = manager.GetStatistics();
-            stats.ActiveWriters.Should().Be(1);
-            stats.ActiveReaders.Should().Be(0); // Read lock acquisition should have failed
-            stats.TotalContentions.Should().BeGreaterThan(0);
+            
+            // Act & Assert
+            // Use a separate task to create a write lock
+            var lockHeld = new ManualResetEventSlim(false);
+            var lockReleased = new ManualResetEventSlim(false);
+            
+            var writerTask = Task.Run(() => {
+                using (var writeLock = manager.AcquireWriteLock(key))
+                {
+                    // Signal that the lock is acquired
+                    lockHeld.Set();
+                    
+                    // Wait until test signals to release the lock
+                    lockReleased.Wait(TimeSpan.FromSeconds(3));
+                }
+            });
+            
+            // Wait for the writer task to acquire the lock
+            lockHeld.Wait(TimeSpan.FromSeconds(3));
+            
+            try
+            {
+                // Try to acquire a read lock with a short timeout
+                using (var readLock = manager.TryAcquireReadLock(key, 10))
+                {
+                    // The readLock should be a non-null placeholder that does nothing when disposed
+                    readLock.Should().NotBeNull();
+                    
+                    // The writer should still hold the lock exclusively
+                    var stats = manager.GetStatistics();
+                    stats.ActiveWriters.Should().Be(1);
+                    stats.ActiveReaders.Should().Be(0); // Read lock acquisition should have failed
+                    stats.TotalContentions.Should().BeGreaterThan(0);
+                }
+            }
+            finally
+            {
+                // Signal the writer task to release the lock
+                lockReleased.Set();
+                writerTask.Wait(TimeSpan.FromSeconds(3));
+            }
         }
         
         [Fact]
@@ -209,20 +244,47 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             // Arrange
             var manager = new PartitionedLockManager();
             var key = "timeout-key";
-
-            // Act - Create a long-running read lock
-            using var readLock = manager.AcquireReadLock(key);
-            // Try to acquire a write lock with a short timeout
-            using var writeLock = manager.TryAcquireWriteLock(key, 10);
-            // Assert
-            // The writeLock should be a non-null placeholder that does nothing when disposed
-            writeLock.Should().NotBeNull();
-
-            // The reader should still hold the lock
-            var stats = manager.GetStatistics();
-            stats.ActiveReaders.Should().Be(1);
-            stats.ActiveWriters.Should().Be(0); // Write lock acquisition should have failed
-            stats.TotalContentions.Should().BeGreaterThan(0);
+            
+            // Act & Assert
+            // Use a separate task to create a read lock
+            var lockHeld = new ManualResetEventSlim(false);
+            var lockReleased = new ManualResetEventSlim(false);
+            
+            var readerTask = Task.Run(() => {
+                using (var readLock = manager.AcquireReadLock(key))
+                {
+                    // Signal that the lock is acquired
+                    lockHeld.Set();
+                    
+                    // Wait until test signals to release the lock
+                    lockReleased.Wait(TimeSpan.FromSeconds(3));
+                }
+            });
+            
+            // Wait for the reader task to acquire the lock
+            lockHeld.Wait(TimeSpan.FromSeconds(3));
+            
+            try
+            {
+                // Try to acquire a write lock with a short timeout
+                using (var writeLock = manager.TryAcquireWriteLock(key, 10))
+                {
+                    // The writeLock should be a non-null placeholder that does nothing when disposed
+                    writeLock.Should().NotBeNull();
+                    
+                    // The reader should still hold the lock
+                    var stats = manager.GetStatistics();
+                    stats.ActiveReaders.Should().Be(1);
+                    stats.ActiveWriters.Should().Be(0); // Write lock acquisition should have failed
+                    stats.TotalContentions.Should().BeGreaterThan(0);
+                }
+            }
+            finally
+            {
+                // Signal the reader task to release the lock
+                lockReleased.Set();
+                readerTask.Wait(TimeSpan.FromSeconds(3));
+            }
         }
         
         [Fact]

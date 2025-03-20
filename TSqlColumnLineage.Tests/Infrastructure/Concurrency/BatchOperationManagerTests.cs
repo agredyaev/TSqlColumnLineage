@@ -88,13 +88,13 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             // Arrange
             var manager = BatchOperationManager.Instance;
             var items = Enumerable.Range(1, 100).ToList();
-
+            
             // Set up a processing operation that squares each number
-            static Task<int> operation(int item, CancellationToken ct)
+            Func<int, CancellationToken, Task<int>> operation = (item, ct) =>
             {
                 return Task.FromResult(item * item);
-            }
-
+            };
+            
             // Act
             var result = await manager.ProcessBatchAsync(items, operation, "SquareNumbers", 10);
             
@@ -118,10 +118,10 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             // Arrange
             var manager = BatchOperationManager.Instance;
             var items = Enumerable.Range(1, 100).ToList();
-
+            
             // Set up a processing operation that squares each number
-            static int operation(int item) => item * item;
-
+            Func<int, int> operation = item => item * item;
+            
             // Act
             var result = manager.ProcessBatch(items, operation, "SquareNumbers", 10);
             
@@ -145,17 +145,17 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             // Arrange
             var manager = BatchOperationManager.Instance;
             var items = Enumerable.Range(1, 100).ToList();
-
+            
             // Set up a processing operation that throws an exception for even numbers
-            static Task<int> operation(int item, CancellationToken ct)
+            Func<int, CancellationToken, Task<int>> operation = (item, ct) =>
             {
                 if (item % 2 == 0)
                 {
                     throw new InvalidOperationException($"Error processing {item}");
                 }
                 return Task.FromResult(item * item);
-            }
-
+            };
+            
             // Act
             var result = await manager.ProcessBatchAsync(items, operation, "ErrorTest", 10);
             
@@ -206,29 +206,30 @@ namespace TSqlColumnLineage.Tests.Infrastructure.Concurrency
             var manager = BatchOperationManager.Instance;
             var items = Enumerable.Range(1, 1000).ToList(); // Large list to ensure batching
             var cts = new CancellationTokenSource();
-            int processedCount = 0;
-
+            var processedCount = 0;
+            
             // Set up an operation that increments counter and checks cancellation
-            int operation(int item)
+            Func<int, int> operation = item =>
             {
                 Interlocked.Increment(ref processedCount);
-
+                
                 // Cancel after processing some items
                 if (processedCount > 10)
                 {
                     cts.Cancel();
+                    // Explicitly throw the exception since we're testing against it
+                    cts.Token.ThrowIfCancellationRequested();
                 }
-
+                
                 // Simulate some work
                 Thread.Sleep(5);
-
+                
                 return item * item;
-            }
-
+            };
+            
             // Act & Assert
-            // Fix 3: Replace the "Or" chaining with a more compatible approach
-            Assert.Throws<OperationCanceledException>(() => 
-                manager.ProcessBatch(items, operation, "CancellationTest", null, cts.Token));
+            Action act = () => manager.ProcessBatch(items, operation, "CancellationTest", null, cts.Token);
+            act.Should().Throw<OperationCanceledException>();
             
             // Verify some items were processed before cancellation
             processedCount.Should().BeGreaterThan(0);

@@ -9,9 +9,6 @@ using Xunit;
 
 namespace TSqlColumnLineage.Tests.Integration
 {
-    /// <summary>
-    /// Integration tests that exercise multiple components together
-    /// </summary>
     public class LineageTrackingIntegrationTests
     {
         [Fact]
@@ -40,7 +37,7 @@ namespace TSqlColumnLineage.Tests.Integration
             RegisterTablesAndColumns(graph, contextManager, metadataStore);
 
             // Process a sample SQL operation
-            ProcessSampleOperation(graph, queryContext);
+            ProcessSampleOperation(graph, queryContext, contextManager);
             
             // Verify the results
             var stats = graph.GetStatistics();
@@ -129,7 +126,7 @@ namespace TSqlColumnLineage.Tests.Integration
             }
         }
         
-        private static void ProcessSampleOperation(LineageGraph graph, QueryContext queryContext)
+        private static void ProcessSampleOperation(LineageGraph graph, QueryContext queryContext, ContextManager contextManager)
         {
             // Create source columns (from Customers table)
             int customersIdColId = graph.GetColumnNode("dbo.Customers", "CustomerId");
@@ -190,9 +187,20 @@ namespace TSqlColumnLineage.Tests.Integration
             queryContext.AddOutputColumn("dbo.CustomerReport", reportOrderCountColId);
             queryContext.AddOutputColumn("dbo.CustomerReport", reportTotalAmountColId);
             
-            // Register inputs in query context
-            queryContext.AddInputTable("dbo.Customers", graph.GetTableColumns(graph.GetColumnNode("dbo.Customers", "CustomerId"))[0]);
-            queryContext.AddInputTable("dbo.Orders", graph.GetTableColumns(graph.GetColumnNode("dbo.Orders", "OrderId"))[0]);
+            // Register inputs in query context - use the contextManager instance parameter
+            var allTables = contextManager.GetAllTables();
+            
+            // Find a valid table ID for the Customers table
+            if (allTables.TryGetValue("dbo.Customers", out int customersTableId))
+            {
+                queryContext.AddInputTable("dbo.Customers", customersTableId);
+            }
+            
+            // Find a valid table ID for the Orders table
+            if (allTables.TryGetValue("dbo.Orders", out int ordersTableId))
+            {
+                queryContext.AddInputTable("dbo.Orders", ordersTableId);
+            }
         }
     }
 }
