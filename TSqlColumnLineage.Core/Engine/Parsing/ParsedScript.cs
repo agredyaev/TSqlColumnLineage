@@ -5,6 +5,9 @@ using System.Text;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using TSqlColumnLineage.Core.Engine.Parsing.Models;
 
+using ModelTable = TSqlColumnLineage.Core.Engine.Parsing.Models.TableReference;
+using ScriptDomTable = Microsoft.SqlServer.TransactSql.ScriptDom.TableReference;
+
 namespace TSqlColumnLineage.Core.Engine.Parsing
 {
     /// <summary>
@@ -26,17 +29,17 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Gets or sets the list of parsed fragments
         /// </summary>
-        public List<SqlFragment> Fragments { get; set; } = new List<SqlFragment>();
+        public List<SqlFragment> Fragments { get; set; } = [];
 
         /// <summary>
         /// Gets or sets the root batch fragments
         /// </summary>
-        public List<SqlFragment> Batches { get; set; } = new List<SqlFragment>();
+        public List<SqlFragment> Batches { get; set; } = [];
 
         /// <summary>
         /// Gets or sets the table references
         /// </summary>
-        public Dictionary<string, List<TableReference>> TableReferences { get; set; } = new Dictionary<string, List<TableReference>>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, List<ModelTable>> TableReferences { get; set; } = new Dictionary<string, List<ModelTable>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Gets or sets the column references 
@@ -46,7 +49,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Gets or sets the list of parsing errors
         /// </summary>
-        public List<ParseError> Errors { get; set; } = new List<ParseError>();
+        public List<ParseError> Errors { get; set; } = [];
 
         /// <summary>
         /// Gets or sets whether parsing was successful
@@ -66,7 +69,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Gets or sets the custom metadata
         /// </summary>
-        public Dictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
+        public Dictionary<string, object> Metadata { get; set; } = [];
 
         /// <summary>
         /// Gets the total count of all SQL fragments
@@ -84,10 +87,10 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Gets table references by table name
         /// </summary>
-        public List<TableReference> GetTableReferences(string tableName)
+        public List<ModelTable> GetTableReferences(string tableName)
         {
             if (string.IsNullOrEmpty(tableName) || !TableReferences.TryGetValue(tableName, out var references))
-                return new List<TableReference>();
+                return [];
 
             return references;
         }
@@ -100,7 +103,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             string key = string.IsNullOrEmpty(tableName) ? columnName : $"{tableName}.{columnName}";
 
             if (!ColumnReferences.TryGetValue(key, out var references))
-                return new List<ColumnReference>();
+                return [];
 
             return references;
         }
@@ -114,8 +117,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 return string.Empty;
 
             // Find line start positions
-            List<int> lineStarts = new List<int>();
-            lineStarts.Add(0);
+            List<int> lineStarts = [0];
 
             for (int i = 0; i < ScriptText.Length; i++)
             {
@@ -146,10 +148,10 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             endLineIdx = Math.Min(lineStarts.Count - 1, endLineIdx + contextLines);
 
             // Extract text
-            int excerptStart = lineStarts[startLineIdx];
-            int excerptEnd = (endLineIdx + 1 < lineStarts.Count) ? lineStarts[endLineIdx + 1] - 1 : ScriptText.Length;
-            
-            StringBuilder sb = new StringBuilder();
+            _ = lineStarts[startLineIdx];
+            _ = (endLineIdx + 1 < lineStarts.Count) ? lineStarts[endLineIdx + 1] - 1 : ScriptText.Length;
+
+            StringBuilder sb = new();
             
             for (int i = startLineIdx; i <= endLineIdx; i++)
             {
@@ -160,7 +162,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 sb.Append($"{i + 1,4}: ");
                 
                 // Add line content
-                string line = ScriptText.Substring(lineStart, lineEnd - lineStart);
+                string line = ScriptText[lineStart..lineEnd];
                 sb.AppendLine(line);
                 
                 // Add highlight for the referenced fragment
@@ -187,8 +189,8 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 ScriptText = scriptText,
                 Source = source,
                 Batches = batches,
-                Fragments = new List<SqlFragment>(),
-                TableReferences = new Dictionary<string, List<TableReference>>(StringComparer.OrdinalIgnoreCase),
+                Fragments = [],
+                TableReferences = new Dictionary<string, List<ModelTable>>(StringComparer.OrdinalIgnoreCase),
                 ColumnReferences = new Dictionary<string, List<ColumnReference>>(StringComparer.OrdinalIgnoreCase)
             };
 
@@ -206,7 +208,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 {
                     if (!script.TableReferences.TryGetValue(tableRef.TableName, out var tableRefs))
                     {
-                        tableRefs = new List<TableReference>();
+                        tableRefs = [];
                         script.TableReferences[tableRef.TableName] = tableRefs;
                     }
                     
@@ -220,7 +222,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                     
                     if (!script.ColumnReferences.TryGetValue(key, out var colRefs))
                     {
-                        colRefs = new List<ColumnReference>();
+                        colRefs = [];
                         script.ColumnReferences[key] = colRefs;
                     }
                     

@@ -5,6 +5,9 @@ using Microsoft.SqlServer.TransactSql.ScriptDom;
 using TSqlColumnLineage.Core.Engine.Parsing.Models;
 using TSqlColumnLineage.Core.Infrastructure.Memory;
 
+using ModelTable = TSqlColumnLineage.Core.Engine.Parsing.Models.TableReference;
+using ScriptDomTable = Microsoft.SqlServer.TransactSql.ScriptDom.TableReference;
+
 namespace TSqlColumnLineage.Core.Engine.Parsing
 {
     /// <summary>
@@ -16,7 +19,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Extracts table references from a SQL fragment
         /// </summary>
-        public static List<TableReference> ExtractTableReferences(TSqlFragment fragment, ParsingOptions options)
+        public static List<ModelTable> ExtractTableReferences(TSqlFragment fragment, ParsingOptions options)
         {
             // Memory-optimized implementation
             var visitor = MemoryManager.Instance.GetOrCreateObjectPool<TableReferenceVisitor>(
@@ -121,14 +124,14 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// </summary>
         private class TableReferenceVisitor : TSqlFragmentVisitor
         {
-            public List<TableReference> TableReferences { get; private set; } = new List<TableReference>();
-            public ParsingOptions Options { get; set; }
+            public List<ModelTable> TableReferences { get; private set; } = [];
+            public ParsingOptions? Options { get; set; }
 
             public override void ExplicitVisit(NamedTableReference node)
             {
                 if (node.SchemaObject != null)
                 {
-                    var reference = new TableReference
+                    var reference = new ModelTable
                     {
                         TableName = node.SchemaObject.BaseIdentifier?.Value ?? string.Empty,
                         SchemaName = node.SchemaObject.SchemaIdentifier?.Value ?? string.Empty,
@@ -168,7 +171,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             {
                 if (node.SchemaObject != null)
                 {
-                    var reference = new TableReference
+                    var reference = new ModelTable
                     {
                         TableName = node.SchemaObject.BaseIdentifier?.Value ?? string.Empty,
                         SchemaName = node.SchemaObject.SchemaIdentifier?.Value ?? string.Empty,
@@ -193,7 +196,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             {
                 if (!string.IsNullOrEmpty(node.Alias?.Value))
                 {
-                    var reference = new TableReference
+                    var reference = new ModelTable
                     {
                         TableName = node.Alias.Value,
                         ReferenceType = TableReferenceType.Derived,
@@ -211,7 +214,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             {
                 if (node.ExpressionName != null)
                 {
-                    var reference = new TableReference
+                    var reference = new ModelTable
                     {
                         TableName = node.ExpressionName.Value,
                         ReferenceType = TableReferenceType.CTE,
@@ -227,7 +230,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
 
             public override void ExplicitVisit(TemporaryTableReference node)
             {
-                var reference = new TableReference
+                var reference = new ModelTable
                 {
                     TableName = node.Name.Value,
                     Alias = node.Alias?.Value ?? string.Empty,
@@ -243,7 +246,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
 
             public override void ExplicitVisit(TableVariableReference node)
             {
-                var reference = new TableReference
+                var reference = new ModelTable
                 {
                     TableName = node.Name.Value,
                     Alias = node.Alias?.Value ?? string.Empty,
@@ -272,12 +275,12 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// </summary>
         private class ColumnReferenceVisitor : TSqlFragmentVisitor
         {
-            public List<ColumnReference> ColumnReferences { get; private set; } = new List<ColumnReference>();
-            public List<TableReference> TableReferences { get; set; }
-            public ParsingOptions Options { get; set; }
+            public List<ColumnReference> ColumnReferences { get; private set; } = [];
+            public List<ModelTable>? TableReferences { get; set; }
+            public ParsingOptions? Options { get; set; }
 
             // Track contexts for source/target determination
-            private readonly Stack<Context> _contexts = new Stack<Context>();
+            private readonly Stack<Context> _contexts = new();
             private bool _inSelectList;
             private bool _inWhereClause;
             private bool _inGroupByClause;
@@ -388,16 +391,10 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             public override void ExplicitVisit(QualifiedJoin node)
             {
                 // Process first table reference
-                if (node.FirstTableReference != null)
-                {
-                    node.FirstTableReference.Accept(this);
-                }
+                node.FirstTableReference?.Accept(this);
 
                 // Process second table reference
-                if (node.SecondTableReference != null)
-                {
-                    node.SecondTableReference.Accept(this);
-                }
+                node.SecondTableReference?.Accept(this);
 
                 // Process join condition with context
                 if (node.SearchCondition != null)
@@ -412,10 +409,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             public override void ExplicitVisit(InsertSpecification node)
             {
                 // Process target
-                if (node.Target != null)
-                {
-                    node.Target.Accept(this);
-                }
+                node.Target?.Accept(this);
 
                 // Process column list with context
                 if (node.Columns != null && node.Columns.Count > 0)
@@ -430,19 +424,13 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 }
 
                 // Process source
-                if (node.InsertSource != null)
-                {
-                    node.InsertSource.Accept(this);
-                }
+                node.InsertSource?.Accept(this);
             }
 
             public override void ExplicitVisit(UpdateSpecification node)
             {
                 // Process target
-                if (node.Target != null)
-                {
-                    node.Target.Accept(this);
-                }
+                node.Target?.Accept(this);
 
                 // Process set clauses with context
                 if (node.SetClauses != null && node.SetClauses.Count > 0)
@@ -457,16 +445,10 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 }
 
                 // Process from clause
-                if (node.FromClause != null)
-                {
-                    node.FromClause.Accept(this);
-                }
+                node.FromClause?.Accept(this);
 
                 // Process where clause
-                if (node.WhereClause != null)
-                {
-                    node.WhereClause.Accept(this);
-                }
+                node.WhereClause?.Accept(this);
             }
 
             public override void ExplicitVisit(ColumnReferenceExpression node)
@@ -534,18 +516,12 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                     ColumnReferences.Add(columnRef);
                 }
 
-                if (node.Expression != null)
-                {
-                    node.Expression.Accept(this);
-                }
+                node.Expression?.Accept(this);
             }
 
             public override void ExplicitVisit(SelectScalarExpression node)
             {
-                if (node.Expression != null)
-                {
-                    node.Expression.Accept(this);
-                }
+                node.Expression?.Accept(this);
 
                 if (node.ColumnName != null)
                 {
@@ -603,10 +579,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 }
 
                 // Process the assignment value (source columns)
-                if (node.NewValue != null)
-                {
-                    node.NewValue.Accept(this);
-                }
+                node.NewValue?.Accept(this);
             }
 
             /// <summary>

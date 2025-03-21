@@ -6,6 +6,7 @@ using Microsoft.SqlServer.TransactSql.ScriptDom;
 using TSqlColumnLineage.Core.Engine.Parsing.Models;
 using TSqlColumnLineage.Core.Infrastructure.Memory;
 
+
 namespace TSqlColumnLineage.Core.Engine.Parsing
 {
     /// <summary>

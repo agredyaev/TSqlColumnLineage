@@ -153,6 +153,28 @@ namespace TSqlColumnLineage.Core.Engine.Parsing.Models
         Variable,
         Parameter
     }
+    
+    /// <summary>
+    /// SQL collation options
+    /// </summary>
+    public enum SqlCollationOptions
+    {
+        None = 0,
+        IgnoreCase = 1,
+        IgnoreAccent = 2,
+        IgnoreKanaType = 4,
+        IgnoreWidth = 8
+    }
+
+    /// <summary>
+    /// Batch separator types
+    /// </summary>
+    public enum BatchSeparatorType
+    {
+        StandardSeparator = 0,
+        GoBatchTerminator = 1,
+        Custom = 2
+    }
 
     /// <summary>
     /// Represents a parsed SQL fragment optimized for lineage analysis.
