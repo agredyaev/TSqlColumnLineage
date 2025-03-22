@@ -13,7 +13,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
     public static class ParserFactory
     {
         // Memory-optimized parser pool
-        private static readonly ObjectPool<TSql160Parser> _parserPool;
+        private static readonly MemoryManager.ObjectPool<TSql150Parser> _parserPool;
 
         /// <summary>
         /// Static constructor to initialize the parser pool
@@ -21,8 +21,8 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         static ParserFactory()
         {
             // Initialize parser pool using memory manager
-            _parserPool = MemoryManager.Instance.GetOrCreateObjectPool<TSql160Parser>(
-                () => new TSql160Parser(true), // Default to quoted identifiers
+            _parserPool = MemoryManager.Instance.GetOrCreateObjectPool<TSql150Parser>(
+                () => new TSql150Parser(true), // Default to quoted identifiers
                 parser => { /* No reset needed */ },
                 Environment.ProcessorCount * 2); // Initial capacity
         }
@@ -32,10 +32,10 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// </summary>
         public static TSqlParser CreateParser(ParsingOptions options)
         {
-            // Currently only supporting SQL Server 2022 (160)
-            if (options.CompatibilityLevel != 160)
+            // Currently only supporting SQL Server 2019 (150)
+            if (options.CompatibilityLevel != 150)
             {
-                throw new NotSupportedException($"SQL Server compatibility level {options.CompatibilityLevel} is not supported. Only 160 (SQL Server 2022) is currently supported.");
+                throw new NotSupportedException($"SQL Server compatibility level {options.CompatibilityLevel} is not supported. Only 150 (SQL Server 2019) is currently supported.");
             }
 
             // Get parser from pool
@@ -55,9 +55,9 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// </summary>
         public static void ReturnParser(TSqlParser parser)
         {
-            if (parser is TSql160Parser sql160Parser)
+            if (parser is TSql160Parser sql150Parser)
             {
-                _parserPool.Return(sql160Parser);
+                _parserPool.Return(sql150Parser);
             }
         }
 

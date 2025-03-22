@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 namespace TSqlColumnLineage.Core.Infrastructure.Memory
 {
@@ -244,6 +245,11 @@ namespace TSqlColumnLineage.Core.Infrastructure.Memory
                 {
                     Instance._statsLock.ExitWriteLock();
                 }
+            }
+
+            internal void Return(TSql160Parser sql150Parser)
+            {
+                throw new NotImplementedException();
             }
         }
 

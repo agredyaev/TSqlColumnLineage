@@ -196,7 +196,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Processes a parsed script to extract lineage information
         /// </summary>
-        public async Task ProcessLineageAsync(ParsedScript parsedScript, LineageGraph graph, ContextManager contextManager = null, 
+        public Task ProcessLineageAsync(ParsedScript parsedScript, LineageGraph graph, ContextManager? contextManager = null, 
             CancellationToken cancellationToken = default)
         {
             if (parsedScript == null || graph == null)
@@ -319,6 +319,8 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 _performanceTracker.IncrementCounter("Parsing", "LineageErrors");
                 throw new ParsingException($"Error processing lineage: {ex.Message}", ex);
             }
+
+            return Task.CompletedTask;
         }
 
         /// <summary>

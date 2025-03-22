@@ -19,7 +19,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
     public class StreamingSqlParser
     {
         // Default options
-        private static readonly ParsingOptions _defaultOptions = new();
+        private static readonly Models.ParsingOptions _defaultOptions = new();
 
         // Performance tracking
         private readonly PerformanceTracker _performanceTracker;
@@ -65,7 +65,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             using var perfTracker = _performanceTracker.TrackOperation("Parsing", "StreamingSqlParser");
 
             // Initialize parser
-            TSqlParser parser = null;
+            TSqlParser? parser = null;
             int fragmentCount = 0;
             int batchCount = 0;
             int errorCount = 0;
@@ -79,8 +79,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 using (var reader = new StringReader(scriptText))
                 {
                     // Get token stream
-                    IList<ParseError> tokenErrors;
-                    parser.GetTokenStream(reader, tokenStream, out tokenErrors);
+                    parser.GetTokenStream(reader, tokenStream, out IList<ParseError> tokenErrors);
                     errorCount += tokenErrors.Count;
 
                     // Split script into batches based on GO separator
@@ -303,18 +302,18 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Extracts the text of a fragment from the original script
         /// </summary>
-        private string ExtractFragmentText(string scriptText, int startOffset, int endOffset)
+        private static string ExtractFragmentText(string scriptText, int startOffset, int endOffset)
         {
             if (string.IsNullOrEmpty(scriptText) || startOffset < 0 || endOffset <= startOffset || endOffset > scriptText.Length)
                 return string.Empty;
 
-            return scriptText.Substring(startOffset, endOffset - startOffset);
+            return scriptText[startOffset..endOffset];
         }
 
         /// <summary>
         /// Counts the number of batches in a token stream
         /// </summary>
-        private int CountBatches(IList<TSqlParserToken> tokenStream)
+        private static int CountBatches(IList<TSqlParserToken> tokenStream)
         {
             int batchCount = 1; // At least one batch
             
@@ -332,7 +331,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Reports parsing progress
         /// </summary>
-        private void ReportProgress(int currentBatch, int totalBatches, int fragmentCount, int errorCount, string message = null)
+        private void ReportProgress(int currentBatch, int totalBatches, int fragmentCount, int errorCount, string? message = null)
         {
             if (_progressChanged != null)
             {
@@ -355,7 +354,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Gets the context for a fragment 
         /// </summary>
-        public static QueryContext CreateQueryContext(SqlFragment fragment, ContextManager contextManager)
+        public static QueryContext? CreateQueryContext(Models.SqlFragment fragment, ContextManager contextManager)
         {
             if (fragment == null || contextManager == null)
                 return null;
@@ -423,6 +422,6 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Gets or sets the progress message
         /// </summary>
-        public string Message { get; set; }
+        public required string Message { get; set; }
     }
 }

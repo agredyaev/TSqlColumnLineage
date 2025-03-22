@@ -564,7 +564,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                             ColumnNumber = derivedTable.StartColumn,
                             Statement = "Subquery",
                             ParsedFragment = derivedTable,
-                            Children = new List<SqlFragment>(),
+                            Children = [],
                             TableReferences = ReferenceExtractor.ExtractTableReferences(derivedTable, options),
                             ColumnReferences = ReferenceExtractor.ExtractColumnReferences(derivedTable, options)
                         };
@@ -593,7 +593,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                         ColumnNumber = subquery.StartColumn,
                         Statement = "Subquery",
                         ParsedFragment = subquery,
-                        Children = new List<SqlFragment>(),
+                        Children = [],
                         TableReferences = ReferenceExtractor.ExtractTableReferences(subquery, options),
                         ColumnReferences = ReferenceExtractor.ExtractColumnReferences(subquery, options)
                     };
@@ -775,26 +775,26 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Extracts the text of a fragment from the original script
         /// </summary>
-        private string ExtractFragmentText(string scriptText, int startOffset, int endOffset)
+        private static string ExtractFragmentText(string scriptText, int startOffset, int endOffset)
         {
             if (string.IsNullOrEmpty(scriptText) || startOffset < 0 || endOffset <= startOffset || endOffset > scriptText.Length)
                 return string.Empty;
 
-            return scriptText.Substring(startOffset, endOffset - startOffset);
+            return scriptText[startOffset..endOffset];
         }
 
         /// <summary>
         /// Creates a parsed script with errors
         /// </summary>
-        private ParsedScript CreateErrorResult(string scriptText, string source, List<ParseError> errors, ParsingOptions options)
+        private static ParsedScript CreateErrorResult(string scriptText, string source, List<ParseError> errors, ParsingOptions options)
         {
             return new ParsedScript
             {
                 ScriptText = scriptText,
                 Source = source,
                 Errors = errors,
-                Fragments = new List<SqlFragment>(),
-                Batches = new List<SqlFragment>(),
+                Fragments = [],
+                Batches = [],
                 TableReferences = new Dictionary<string, List<TableReference>>(StringComparer.OrdinalIgnoreCase),
                 ColumnReferences = new Dictionary<string, List<ColumnReference>>(StringComparer.OrdinalIgnoreCase)
             };

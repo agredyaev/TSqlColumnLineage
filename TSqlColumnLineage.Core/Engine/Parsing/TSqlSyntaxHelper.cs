@@ -13,12 +13,12 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
     /// Provides utilities for working with T-SQL syntax specialties.
     /// Optimized for memory efficiency using data-oriented design.
     /// </summary>
-    public static class TSqlSyntaxHelper
+    public static partial class TSqlSyntaxHelper
     {
         // Regex patterns for common T-SQL syntax elements
-        private static readonly Regex _tableNamePattern = new(@"(?:(?:\[([^\]]+)\])|([a-zA-Z0-9_]+))(?:\.(?:\[([^\]]+)\])|\.([a-zA-Z0-9_]+))?", RegexOptions.Compiled);
-        private static readonly Regex _columnNamePattern = new(@"(?:(?:\[([^\]]+)\])|([a-zA-Z0-9_]+))\.(?:(?:\[([^\]]+)\])|([a-zA-Z0-9_]+))", RegexOptions.Compiled);
-        private static readonly Regex _aliasPattern = new(@"(?:AS\s+)?(?:\[([^\]]+)\]|([a-zA-Z0-9_]+))", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex _tableNamePattern = MyRegex();
+        private static readonly Regex _columnNamePattern = MyRegex1();
+        private static readonly Regex _aliasPattern = MyRegex2();
         
         // Cache for commonly used syntax objects
         private static readonly Dictionary<string, SqlFragmentType> _statementTypeMap = InitializeStatementTypeMap();
@@ -379,5 +379,12 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
                 _ => TableReferenceType.Table
             };
         }
+
+        [GeneratedRegex(@"(?:(?:\[([^\]]+)\])|([a-zA-Z0-9_]+))(?:\.(?:\[([^\]]+)\])|\.([a-zA-Z0-9_]+))?", RegexOptions.Compiled)]
+        private static partial Regex MyRegex();
+        [GeneratedRegex(@"(?:(?:\[([^\]]+)\])|([a-zA-Z0-9_]+))\.(?:(?:\[([^\]]+)\])|([a-zA-Z0-9_]+))", RegexOptions.Compiled)]
+        private static partial Regex MyRegex1();
+        [GeneratedRegex(@"(?:AS\s+)?(?:\[([^\]]+)\]|([a-zA-Z0-9_]+))", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+        private static partial Regex MyRegex2();
     }
 }

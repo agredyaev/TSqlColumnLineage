@@ -339,7 +339,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Counts the number of lines in text
         /// </summary>
-        private int CountLines(string text, out int lastLineLength)
+        private static int CountLines(string text, out int lastLineLength)
         {
             if (string.IsNullOrEmpty(text))
             {
@@ -392,7 +392,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Creates a lookup table for table references
         /// </summary>
-        private Dictionary<string, List<TableReference>> CreateTableReferenceLookup(List<SqlFragment> fragments)
+        private static Dictionary<string, List<TableReference>> CreateTableReferenceLookup(List<SqlFragment> fragments)
         {
             var lookup = new Dictionary<string, List<TableReference>>(StringComparer.OrdinalIgnoreCase);
             
@@ -443,12 +443,12 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Extracts a fragment of text
         /// </summary>
-        private string ExtractFragmentText(string text, int startOffset, int endOffset)
+        private static string ExtractFragmentText(string text, int startOffset, int endOffset)
         {
             if (string.IsNullOrEmpty(text) || startOffset < 0 || endOffset <= startOffset || endOffset > text.Length)
                 return string.Empty;
 
-            return text.Substring(startOffset, endOffset - startOffset);
+            return text[startOffset..endOffset];
         }
 
         /// <summary>
@@ -496,7 +496,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             public int LineNumber { get; set; }
             public int ColumnNumber { get; set; }
             public string SqlText { get; set; } = string.Empty;
-            public TSqlFragment Ast { get; set; }
+            public required TSqlFragment Ast { get; set; }
             public List<ParseError> Errors { get; set; } = [];
             public bool Success { get; set; }
         }

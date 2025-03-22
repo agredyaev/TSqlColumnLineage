@@ -283,8 +283,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// </summary>
         public static async Task<LineageGraph> ToLineageGraphAsync(this ParsedScript parsedScript, CancellationToken cancellationToken = default)
         {
-            if (parsedScript == null)
-                throw new ArgumentNullException(nameof(parsedScript));
+            ArgumentNullException.ThrowIfNull(parsedScript);
 
             // Create lineage graph
             var graph = new LineageGraph();
@@ -321,8 +320,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// </summary>
         public static void SaveToJson(this ParsedScript parsedScript, string filePath)
         {
-            if (parsedScript == null)
-                throw new ArgumentNullException(nameof(parsedScript));
+            ArgumentNullException.ThrowIfNull(parsedScript);
 
             // This would require implementing JSON serialization
             // Left as an exercise for the implementer

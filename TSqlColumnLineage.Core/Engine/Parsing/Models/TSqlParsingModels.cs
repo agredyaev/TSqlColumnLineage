@@ -17,7 +17,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing.Models
         /// <summary>
         /// Gets or sets the SQL Server compatibility level
         /// </summary>
-        public int CompatibilityLevel { get; set; } = 160; // SQL Server 2022
+        public int CompatibilityLevel { get; set; } = 150; // SQL Server 2019
 
         /// <summary>
         /// Gets or sets the collation options
@@ -153,7 +153,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing.Models
         Variable,
         Parameter
     }
-    
+
     /// <summary>
     /// SQL collation options
     /// </summary>
@@ -220,32 +220,32 @@ namespace TSqlColumnLineage.Core.Engine.Parsing.Models
         /// <summary>
         /// Gets or sets the parsed fragment
         /// </summary>
-        public TSqlFragment ParsedFragment { get; set; }
+        public required TSqlFragment ParsedFragment { get; set; }
 
         /// <summary>
         /// Gets or sets the parent batch fragment, if any
         /// </summary>
-        public SqlFragment ParentBatch { get; set; }
+        public required SqlFragment ParentBatch { get; set; }
 
         /// <summary>
         /// Gets or sets the table references in this fragment
         /// </summary>
-        public List<TableReference> TableReferences { get; set; } = new List<TableReference>();
+        public List<TableReference> TableReferences { get; set; } = [];
 
         /// <summary>
         /// Gets or sets the column references in this fragment
         /// </summary>
-        public List<ColumnReference> ColumnReferences { get; set; } = new List<ColumnReference>();
+        public List<ColumnReference> ColumnReferences { get; set; } = [];
 
         /// <summary>
         /// Gets or sets the child fragments
         /// </summary>
-        public List<SqlFragment> Children { get; set; } = new List<SqlFragment>();
+        public List<SqlFragment> Children { get; set; } = [];
 
         /// <summary>
         /// Gets or sets custom metadata for this fragment
         /// </summary>
-        public Dictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
+        public Dictionary<string, object> Metadata { get; set; } = [];
 
         /// <summary>
         /// Returns a string representation of this fragment
@@ -258,7 +258,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing.Models
         /// <summary>
         /// Truncates text for display
         /// </summary>
-        private string TruncateText(string text, int maxLength)
+        private static string TruncateText(string text, int maxLength)
         {
             if (string.IsNullOrEmpty(text))
                 return string.Empty;
