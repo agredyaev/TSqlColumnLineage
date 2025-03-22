@@ -180,13 +180,13 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             identifier = identifier.Trim();
             if (identifier.StartsWith("[") && identifier.EndsWith("]"))
             {
-                identifier = identifier.Substring(1, identifier.Length - 2);
+                identifier = identifier[1..^1];
             }
 
             // Remove quotes
             if (identifier.StartsWith("\"") && identifier.EndsWith("\""))
             {
-                identifier = identifier.Substring(1, identifier.Length - 2);
+                identifier = identifier[1..^1];
             }
 
             return identifier;
