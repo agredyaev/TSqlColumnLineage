@@ -6,9 +6,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using TSqlColumnLineage.Core.Domain.Context;
+using TSqlColumnLineage.Core.Engine.Parsing.Models;
 using TSqlColumnLineage.Core.Infrastructure.Concurency;
 using TSqlColumnLineage.Core.Infrastructure.Memory;
 using TSqlColumnLineage.Core.Infrastructure.Monitoring;
+
 
 namespace TSqlColumnLineage.Core.Engine.Parsing
 {
@@ -57,7 +59,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// </summary>
         public async Task ParseStreamingAsync(string scriptText, string source, 
             Action<SqlFragment> batchCallback, Action<SqlFragment> statementCallback,
-            ParsingOptions options = null, CancellationToken cancellationToken = default)
+            ParsingOptions? options = null, CancellationToken cancellationToken = default)
         {
             options ??= _defaultOptions;
 

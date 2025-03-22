@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using TSqlColumnLineage.Core.Domain.Context;
 using TSqlColumnLineage.Core.Domain.Graph;
+using TSqlColumnLineage.Core.Engine.Parsing.Models;
 using TSqlColumnLineage.Core.Infrastructure;
 using TSqlColumnLineage.Core.Infrastructure.Memory;
 using TSqlColumnLineage.Core.Infrastructure.Monitoring;
@@ -68,7 +69,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Parses a SQL script and returns a parsed script object
         /// </summary>
-        public ParsedScript Parse(string scriptText, string source = "", ParsingOptions options = null)
+        public ParsedScript Parse(string scriptText, string source = "", ParsingOptions? options = null)
         {
             options ??= _defaultOptions;
 
@@ -85,7 +86,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Parses a SQL script asynchronously
         /// </summary>
-        public Task<ParsedScript> ParseAsync(string scriptText, string source = "", ParsingOptions options = null, CancellationToken cancellationToken = default)
+        public Task<ParsedScript> ParseAsync(string scriptText, string source = "", ParsingOptions? options = null, CancellationToken cancellationToken = default)
         {
             options ??= _defaultOptions;
 
@@ -102,7 +103,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Parses a SQL script from a file asynchronously
         /// </summary>
-        public async Task<ParsedScript> ParseFileAsync(string filePath, ParsingOptions options = null, CancellationToken cancellationToken = default)
+        public async Task<ParsedScript> ParseFileAsync(string filePath, ParsingOptions? options = null, CancellationToken cancellationToken = default)
         {
             options ??= _defaultOptions;
 

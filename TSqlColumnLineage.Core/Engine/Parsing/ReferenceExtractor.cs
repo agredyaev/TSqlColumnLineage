@@ -44,7 +44,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Extracts column references from a SQL fragment
         /// </summary>
-        public static List<ColumnReference> ExtractColumnReferences(TSqlFragment fragment, ParsingOptions options, List<TableReference> tableReferences = null)
+        public static List<ColumnReference> ExtractColumnReferences(TSqlFragment fragment, ParsingOptions options, List<ModelTable>? tableReferences = null)
         {
             // Memory-optimized implementation
             var visitor = MemoryManager.Instance.GetOrCreateObjectPool<ColumnReferenceVisitor>(

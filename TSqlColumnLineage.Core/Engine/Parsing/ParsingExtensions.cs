@@ -8,6 +8,10 @@ using System.Threading.Tasks;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using TSqlColumnLineage.Core.Domain.Context;
 using TSqlColumnLineage.Core.Domain.Graph;
+using TSqlColumnLineage.Core.Engine.Parsing.Models;
+
+
+using ModelTable = TSqlColumnLineage.Core.Engine.Parsing.Models.TableReference;
 
 namespace TSqlColumnLineage.Core.Engine.Parsing
 {
@@ -20,12 +24,12 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
         /// <summary>
         /// Extracts all table references from a parsed script
         /// </summary>
-        public static List<TableReference> ExtractAllTableReferences(this ParsedScript parsedScript)
+        public static List<ModelTable> ExtractAllTableReferences(this ParsedScript parsedScript)
         {
             if (parsedScript == null)
                 return [];
 
-            var allTables = new List<TableReference>();
+            var allTables = new List<ModelTable>();
             
             foreach (var fragment in parsedScript.Fragments)
             {
@@ -338,7 +342,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             // Format SQL using the ScriptDom formatter
             if (fragment.ParsedFragment != null)
             {
-                var generator = new Sql160ScriptGenerator(new SqlScriptGeneratorOptions
+                var generator = new Sql150ScriptGenerator(new SqlScriptGeneratorOptions
                 {
                     KeywordCasing = KeywordCasing.Uppercase,
                     IncludeSemicolons = true,

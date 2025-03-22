@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using TSqlColumnLineage.Core.Engine.Parsing.Models;
 using TSqlColumnLineage.Core.Infrastructure.Concurency;
 using TSqlColumnLineage.Core.Infrastructure.Memory;
 using TSqlColumnLineage.Core.Infrastructure.Monitoring;
@@ -146,7 +147,7 @@ namespace TSqlColumnLineage.Core.Engine.Parsing
             foreach (var result in batchResults)
             {
                 allErrors.AddRange(result.Errors);
-            }
+            }  
 
             // Process successful batch results
             var sqlParser = new SqlParser();
